@@ -6,9 +6,16 @@ import type { Binary } from 'bson';
 import connect from './connect';
 import { mochaTestServer } from '@mongodb-js/compass-test-server';
 
-// Security-relevant test -- see in-use-encryption e2e tests for description.
-// (In particular, the tests here verify that decrypted data is always encrypted
-// when written back into the database)
+/**
+ * @securityTest In-Use Encryption Re-Encryption Assurance Tests
+ *
+ * MongoDB's In-Use Encryption features allow data to be stored and retrieved
+ * in encrypted form. A critical security property is that when decrypted data
+ * is written back into the database, it must always be re-encrypted —
+ * never sent in plaintext. These tests verify that the CSFLE collection
+ * tracker correctly enforces this invariant, preventing accidental plaintext
+ * exposure of data that the user intended to keep encrypted.
+ */
 describe('CSFLECollectionTracker', function () {
   const DECRYPTED_KEYS = Symbol.for('@@mdb.decryptedKeys');
   const ALGO_DET = 'AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic';

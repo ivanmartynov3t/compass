@@ -11,6 +11,16 @@ import { expect } from 'chai';
 import * as Selectors from '../helpers/selectors.ts';
 import type { ConnectFormState } from '../helpers/connect-form-state.ts';
 
+/**
+ * @securityTest Kerberos Password Field Visibility Tests
+ *
+ * Compass supports Kerberos (GSSAPI) authentication, which optionally accepts
+ * a Kerberos password for specific deployment configurations. By default,
+ * this field is hidden to minimise credential exposure in the connection form.
+ * These tests verify that the field is hidden when the feature flag is disabled
+ * and visible when it is explicitly enabled by an administrator, ensuring that
+ * credentials are not presented to users unless intentionally configured.
+ */
 describe('showKerberosPasswordField', function () {
   let compass: Compass;
   let browser: CompassBrowser;

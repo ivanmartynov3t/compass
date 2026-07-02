@@ -19,6 +19,15 @@ const getPreferencesFile = (tmpDir: string) => {
   return path.join(getPreferencesFolder(tmpDir), 'General.json');
 };
 
+/**
+ * @securityTest Sensitive Preferences Encryption Tests
+ *
+ * Compass persists user preferences to disk, some of which contain sensitive
+ * information such as proxy passwords and SSH private key passphrases.
+ * These tests verify that sensitive preference fields are encrypted at rest:
+ * non-secret values remain readable on disk, while secrets such as passwords
+ * and passphrases are never stored in plaintext.
+ */
 describe('PersistentStorage', function () {
   let tmpDir: string;
   beforeEach(async function () {
