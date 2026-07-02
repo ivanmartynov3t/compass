@@ -264,21 +264,32 @@ The `enableChatbotEndpointForGenAI` preference flag is `stage: 'released'`, whic
 
 Prompts are built in `packages/compass-generative-ai/src/utils/gen-ai-prompt.ts`.
 
-The **user message** (sent as `messages[0].content`) contains:
+The **user message** (`messages[0].content`) is assembled by `buildUserPromptForQuery()`
+(lines 98–173). Fields are added in order: database name, collection name, schema, sample
+documents (conditional), then the query request. The exact output looks like:
+
 ```
 Database name: "<db>"
 Collection name: "<collection>"
 Schema from a sample of documents from the collection:
 ```
-<user_schema>{ field: type, ... }</user_schema>
+<user_schema>{ field: 'BSONType', ... }</user_schema>
 ```
 Sample documents from the collection:
 ```
-<sample_documents>[…]</sample_documents>
+<sample_documents>[
+  { _id: ObjectId('…'), field: value, … }
+]</sample_documents>
 ```
 Write a query [or: Generate an aggregation] that does the following:
-<user_prompt>{escaped user input}</user_prompt>
+<user_prompt>{XML-escaped user input}</user_prompt>
 ```
+
+**Serialisation format for sample documents:** `toJSString()` from `mongodb-query-parser`
+(line 133) — produces **MongoDB shell syntax**, not JSON or EJSON. For example,
+`ObjectId` values appear as `ObjectId('…')` rather than `{"$oid":"…"}`.
+The schema is serialised the same way via `toJSString(flattenSchemaToObject(schema))` (line 121),
+producing `{ fieldName: 'BSONTypeName' }` objects with no document values.
 
 The **system instructions** string (`providerOptions.openai.instructions`) varies by type:
 
@@ -324,9 +335,15 @@ Key constraints imposed:
 
 #### Prompt size management
 
-The total prompt is capped at ~250 k characters (`MAX_TOTAL_PROMPT_LENGTH` in `gen-ai-prompt.ts`), matching the SLIM model's context window:
-1. If `schema + sampleDocuments` exceeds the limit, sample documents are trimmed to 1.
-2. If still too large, an `AiChatbotPromptTooLargeError` is thrown and the user sees a friendly error.
+The total prompt is capped at `MAX_TOTAL_PROMPT_LENGTH = 250_000` characters
+(`gen-ai-prompt.ts:6`). The trimming logic (`gen-ai-prompt.ts:128–171`) works as follows:
+1. Attempt to include all fetched documents (`sampleDocumentsStr`). If the prompt fits, use them.
+2. If not, fall back to the first document only (`MIN_SAMPLE_DOCUMENTS = 1`,
+   `gen-ai-prompt.ts:7`). If the prompt fits with one document, use it.
+3. If neither fits (i.e. the documents are omitted entirely) and the base prompt (schema +
+   user input) is still over the limit, an `AiChatbotPromptTooLargeError` is thrown and the
+   user sees: *"Sorry, your request is too large. Please use a smaller prompt or try using
+   this feature on a collection with smaller documents."*
 
 #### Data flow
 
@@ -640,7 +657,7 @@ packages/
 | **State** | Stateful (full conversation history every turn) | Stateless (single prompt/response, no history) |
 | **Reasoning** | Yes | No |
 | **Transport** | `DocsProviderTransport` → `streamText` | Direct `streamText` (via `getAiQueryResponse` or `generateSchemaForSingleChunk`) |
-| **Backend auth** | `globalThis.fetch` (session-based; no explicit auth header from client) | `atlasService.authenticatedFetch()` — injects `Authorization: ****** |
+| **Backend auth** | `globalThis.fetch` (session-based; no explicit auth header from client) | `atlasService.authenticatedFetch()` → `authService.getAuthHeaders()` → `Authorization: ****** token>` |
 | **`search_content` (RAG)** | Always instructed to call it (backend tool) | Never used |
 | **Client-side tools** | MCP database tools (when tool calling enabled) | Forced `mockDataSchema` tool call only (mock data); no tools for NLQ |
 | **Conversational use** | Yes — full multi-turn chat | No — each call is independent |

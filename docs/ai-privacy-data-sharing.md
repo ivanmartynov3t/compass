@@ -12,8 +12,8 @@ Compass AI features are **opt-in by default**.
 
 | Preference | Default | Source |
 |---|---|---|
-| `optInGenAIFeatures` | `false` | `packages/compass-preferences-model/src/preferences-schema.tsx:898` (`z.boolean().default(false)`) |
-| `enableGenAIFeatures` | depends on cloud rollout flag | `utils.ts:isAIFeatureEnabled()` |
+| `optInGenAIFeatures` | `false` | `packages/compass-preferences-model/src/preferences-schema.tsx:890` (`z.boolean().default(false)`) |
+| `enableGenAIFeatures` | depends on cloud rollout flag | `packages/compass-preferences-model/src/utils.ts:isAIFeatureEnabled()` |
 
 **What the user sees before opting in.**
 The opt-in modal (`packages/compass-generative-ai/src/components/ai-optin-modal.tsx`) displays a
@@ -63,20 +63,23 @@ The exact user message is assembled in
 
 | Field | Content | Source |
 |---|---|---|
-| `<database>` | Database name (plain string) | `gen-ai-prompt.ts:103` |
-| `<collection>` | Collection name (plain string) | `gen-ai-prompt.ts:104` |
-| `<schema>` | Field names + BSON types only (no values) | `gen-ai-prompt.ts:105–110` |
-| `<user_prompt>` | User's verbatim NL query | `gen-ai-prompt.ts:111` |
+| `Database name: "…"` | Database name (plain string) | `gen-ai-prompt.ts:114–115` |
+| `Collection name: "…"` | Collection name (plain string) | `gen-ai-prompt.ts:117–118` |
+| `<user_schema>…</user_schema>` | Field names + BSON types only, no values (via `flattenSchemaToObject`) | `gen-ai-prompt.ts:120–126` |
+| `<user_prompt>…</user_prompt>` | User's verbatim NL query (XML-escaped) | `gen-ai-prompt.ts:111` |
 
 **Field included only when `enableGenAISampleDocumentPassing = true`:**
 
 | Field | Content | Source |
 |---|---|---|
-| `<sample_documents>` | Up to 4 raw EJSON-serialised documents | `gen-ai-prompt.ts:116–161` |
+| `<sample_documents>…</sample_documents>` | Up to 4 raw documents in MongoDB shell syntax | `gen-ai-prompt.ts:128–158` |
 
 Sample documents are fetched via `dataService.sample()` with `size: 4`
-(`ai-query-reducer.ts:207–211`). Documents are serialised with `EJSON.serialize()` —
-**all field values are included verbatim; no value masking is applied.**
+(`ai-query-reducer.ts:207–211`). Documents are serialised with `toJSString()` from
+`mongodb-query-parser`, which produces **MongoDB shell syntax** (e.g.
+`ObjectId('…')`, not `{"$oid":"…"}`). **All field values are included verbatim; no value
+masking is applied.** The test suite confirms this format at
+`gen-ai-prompt.spec.ts:44–50`.
 
 **`enableGenAISampleDocumentPassing` preference:**
 
@@ -85,12 +88,15 @@ Sample documents are fetched via `dataService.sample()` with `size: 4`
 | Default | `false` (opt-out by default — samples are **not** sent unless explicitly enabled) |
 | Source | `preferences-schema.tsx:965` (`z.boolean().default(false)`) |
 | UI-exposed | Yes (`ui: true`) — users can toggle in Settings |
-| Read at call sites | `ai-query-reducer.ts:173`, `pipeline-ai.ts:289` |
+| Read at NLQ call sites | `ai-query-reducer.ts:172–173`, `pipeline-ai.ts:242–243` |
 
 **Prompt length limiting:**
 `MAX_TOTAL_PROMPT_LENGTH = 250_000` characters (`gen-ai-prompt.ts:6`).
-Trimming order: 4 docs → 1 doc → 0 docs (lines 128–159). If even a single document
-would exceed the limit, documents are dropped and the prompt proceeds without them.
+Trimming order (`gen-ai-prompt.ts:128–171`):
+1. Try all fetched documents — if total prompt fits, use them all.
+2. Fall back to 1 document (`MIN_SAMPLE_DOCUMENTS = 1`, `gen-ai-prompt.ts:7`) — if that fits, use it.
+3. If no documents are included and the base prompt (schema + user input) still exceeds the limit,
+   an `AiChatbotPromptTooLargeError` is thrown and the user sees a friendly error message.
 
 ### 2b. AI Assistant / CHAT Model (`mongodb-chat-2.1-mini-reasoning`)
 
@@ -172,13 +178,13 @@ The following data is sent to the LLM without modification:
 | Data | Redaction mechanism | Where applied |
 |---|---|---|
 | Connection string password / userinfo | `redactConnectionString()` → `<credentials>` | `prompts.ts:240, 291` |
-| SSH tunnel password | Set to `'<redacted>'` | `data-service/src/redact.ts:13` |
-| SSH identity key passphrase | Set to `'<redacted>'` | `data-service/src/redact.ts:17` |
+| SSH tunnel password | Set to `'<redacted>'` | `data-service/src/redact.ts:22` |
+| SSH identity key passphrase | Set to `'<redacted>'` | `data-service/src/redact.ts:25–26` |
 | Atlas connection string in error context | Omitted entirely | `prompts.ts:233–262` |
-| Schema field values (schema path) | Only field names + BSON types emitted | `gen-ai-prompt.ts:105–110` |
-| Sample document values (when flag is off) | Documents not fetched / not included | `ai-query-reducer.ts:173` |
+| Schema field values (schema path) | Only field names + BSON types emitted via `flattenSchemaToObject()` | `gen-ai-prompt.ts:120–126` |
+| Sample document values (when flag is off) | Documents not fetched / not included | `ai-query-reducer.ts:172–173` |
 | Mock data sample values | Stripped when `includeSampleValues=false` | `atlas-ai-service.ts:526–600` |
-| User analytics ID | SHA-256 hash of internal user ID | `compass-assistant-provider.tsx:423` |
+| User analytics ID | SHA-256 hex-digest of internal user ID via `crypto.subtle.digest` | `compass-assistant/src/utils.ts:130–155` |
 
 ---
 
@@ -201,14 +207,12 @@ environment variable (`util.ts:226–233`). No override is set in production bui
 ### Authentication
 
 **SLIM model (NLQ):** Uses `authenticatedFetch()` in
-`packages/atlas-service/src/atlas-service.ts` (lines 161–173), which injects:
-
-```
-Authorization: ******
-```
-
-where `<token>` is an OIDC access token obtained via `maybeGetToken()` (IPC call to the Electron
-main process in standalone Compass, or via the Atlas web session in Data Explorer).
+`packages/atlas-service/src/atlas-service.ts` (lines 161–174), which calls
+`authService.getAuthHeaders()` and merges the result into the request headers.
+`getAuthHeaders()` is implemented in `compass-atlas-auth-service.ts` (lines 27–31) and
+returns `{ Authorization: '******' }` where `<token>` is an OIDC access token
+obtained via `this.ipc.maybeGetToken()` — an IPC call to the Electron main process in
+standalone Compass, or a web session token in Atlas Data Explorer.
 
 **CHAT model:** Uses `globalThis.fetch` directly (`compass-assistant-provider.tsx:824`). No
 explicit `Authorization` header is added by the Compass client. The Knowledge Server endpoint
