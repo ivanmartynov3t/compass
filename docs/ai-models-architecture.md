@@ -89,32 +89,46 @@ Powers the Compass AI assistant drawer — a side-panel chat that users interact
    - Any registered MCP tools (see below)
    - Headers: `X-Request-Origin`, `X-Client-Request-Id`
 
-3. **Tool calling.** When tool calling is enabled, a `ToolsController` starts an in-memory MCP (Model Context Protocol) server backed by `mongodb-mcp-server`. The assistant can invoke read-only database tools (`find`, `aggregate`, `count`, `list-databases`, `list-collections`, `collection-schema`, `collection-indexes`, `collection-storage-size`, `db-stats`, `explain`, `mongodb-logs`) as well as context-aware tools (`get-current-query`, `get-current-pipeline`). The LLM decides when to call tools; the user can approve or deny destructive operations before they execute. Tool calling is gated behind two feature preferences (`enableToolCalling`, `enableGenAIToolCalling`).
+3. **Tool calling.** When tool calling is enabled, a `ToolsController` starts an in-memory MCP (Model Context Protocol) server backed by `mongodb-mcp-server`. The assistant can invoke read-only database tools (`find`, `aggregate`, `count`, `list-databases`, `list-collections`, `collection-schema`, `collection-indexes`, `collection-storage-size`, `db-stats`, `explain`, `mongodb-logs`) as well as context-aware tools (`get-current-query`, `get-current-pipeline`). The LLM decides when to call tools; the user can approve or deny destructive operations before they execute. Tool calling is gated behind **three** preferences: `enableToolCalling` (feature flag with `atlasCloudFeatureScope: 'group'`, `stage: 'released'`), `enableGenAIToolCalling` (user-facing toggle in Settings, default `false`), and `enableGenAIToolCallingAtlasProject` (CLI/global flag, default `true`). The full condition evaluated before each message send is:
+   ```ts
+   const enableToolCalling = prefs.enableToolCalling;
+   const enableGenAIToolCalling = prefs.enableGenAIToolCallingAtlasProject && prefs.enableGenAIToolCalling;
+   // tool server started only when both are true
+   ```
 
-4. **Entry points.** Four pre-built entry-point flows exist that inject a structured prompt into the chat automatically when a user clicks a UI button. Each uses a per-message `instructions` override instead of the default system prompt:
-   - *Explain plan* (`buildExplainPlanPrompt`) — sends an explain-plan JSON and asks the model to interpret it
-   - *Performance insights* (`buildProactiveInsightsPrompt`) — sends proactive insight data for deeper explanation
-   - *Connection error* (`buildConnectionErrorPrompt`) — sends an error object for diagnosis
-   - *Context update* (`buildContextPrompt`) — injected automatically as a system message whenever workspace state changes; describes the active tab, namespace, collection metadata, and (if tool calling is on) which tools are available
+4. **Entry points.** Four pre-built entry-point flows exist that inject a structured prompt into the chat automatically when a user clicks a UI button. Each uses a per-message `instructions` override instead of the default system prompt — except the proactive insights and connection error flows, which do **not** override `instructions` and therefore use the default system prompt:
+   - *Explain plan* (`buildExplainPlanPrompt`) — sends an explain-plan JSON and asks the model to interpret it; includes custom `instructions`
+   - *Performance insights* (`buildProactiveInsightsPrompt`) — sends proactive insight data; **no** `instructions` override (uses default system prompt)
+   - *Connection error* (`buildConnectionErrorPrompt`) — sends an error object for diagnosis; **no** `instructions` override (uses default system prompt)
+   - *Context update* (`buildContextPrompt`) — injected automatically as a `system` role message when `message?.metadata?.sendContext` is true and the workspace context has changed (deduped: the new context text is compared with the last sent context to avoid resending an identical message); describes the active tab, namespace, collection metadata, and (if tool calling is on) which tools are available
 
-5. **Authentication and routing.** `createOpenAI()` from `@ai-sdk/openai` is initialised with a placeholder `baseURL`. A custom `fetch` interceptor replaces the placeholder at call-time with `atlasService.assistantApiEndpoint()`, and authentication headers are injected by `atlasService.authenticatedFetch()`. This allows the base URL to change dynamically without recreating the model instance.
+5. **Authentication and routing.** `createOpenAI()` from `@ai-sdk/openai` is initialised with a placeholder `baseURL`. A custom `fetch` function replaces the placeholder with `atlasService.assistantApiEndpoint()` on every call — important because the Atlas endpoint can change during a session. **The CHAT model uses `globalThis.fetch` directly** (no auth headers injected by the Compass client); authentication for the assistant chat endpoint relies on the browser or Electron session context (e.g., session cookies in Atlas Data Explorer). This differs from the SLIM model — see *How Both Models Reach the Backend* for a side-by-side comparison. The CHAT `fetch` also includes a temporary transformation that rewrites the `developer` role to `system` in the serialised request body, since the MongoDB Knowledge Server does not yet accept the `developer` role.
 
 ### Data flow
 
 ```
 User types message
   → ensureOptInAndSend (Redux thunk)
-    → buildContextPrompt()          ← current workspace / connection state (injected as system message)
+    → buildContextPrompt()          ← current workspace / connection state (injected as system message,
+                                       only when sendContext=true and context has changed)
     → setToolsContext()             ← registers available MCP tools
     → chat.sendMessage()
       → DocsProviderTransport.sendMessages()
         → streamText(
             model = AI_MODEL_CHAT_VERSION,
-            messages = filtered conversation history,
+            messages = filtered conversation history
+              (confirmation messages excluded; full history unless sendWithoutHistory=true),
             tools = MCP tool set (if tool calling enabled),
-            providerOptions.openai.instructions = system prompt
-              (default: buildConversationInstructionsPrompt
-               or per-message override for entry-point flows)
+            providerOptions.openai = {
+              instructions = system prompt
+                (default: buildConversationInstructionsPrompt
+                 or per-message override for entry-point flows),
+              store: false,
+              metadata: {
+                analytics_id,
+                sensitive_storage: 'false' if any active connection uses FLE, else 'true'
+              }
+            }
           )
           → Atlas Knowledge Server (streaming SSE)
         → UIMessageStream
@@ -202,17 +216,21 @@ Three variants exist (all use default conversation instructions, not a custom ov
 
 #### Connection error entry-point (`buildConnectionErrorPrompt`)
 
-Sends the (password-redacted) connection string and error message. The model is asked to provide debugging instructions. No custom `instructions` override — uses the default system prompt.
+Sends the error message and asks for debugging instructions. No custom `instructions` override — uses the default system prompt.
+
+**Compass vs. Atlas Data Explorer behavior:**
+- **Non-Atlas connection (Compass):** the (password-redacted) connection string is included in the prompt along with the error message.
+- **Atlas connection (Data Explorer):** the connection string is **omitted** from the prompt (Atlas session context already identifies the connection); only the error message is sent.
 
 #### Context system message (`buildContextPrompt`)
 
-Injected automatically as a `system` role message on every workspace navigation. This is not a model instructions string but a message in the conversation history that gives the model situational awareness:
+Injected automatically as a `system` role message when `message?.metadata?.sendContext` is true and the context content has changed since it was last sent (deduped by comparing the serialised context text). This is not a model instructions string but a message in the conversation history that gives the model situational awareness:
 
 - Active connection name and redacted connection string
 - Current tab (Documents, Aggregations, Schema, etc.) and namespace
 - Collection metadata (time-series, view, clustered, FLE, Atlas Search support, Data Lake, Atlas, server version)
 - With tool calling **on**: `<abilities>` block listing what the model CAN do (query DB, access schema, get current query/pipeline) and `<instructions>` for when to use those tools.
-- With tool calling **off**: `<inabilities>` block listing what the model CANNOT do, plus instructions to tell the user to enable read-only tool access.
+- With tool calling **off**: `<inabilities>` block listing what the model CANNOT do, plus instructions to tell the user to enable read-only tool access (and a list of which tools would become available).
 
 ---
 
@@ -326,8 +344,15 @@ User types NL description in query bar / aggregation builder
         → streamText(
             model = AI_MODEL_SLIM_VERSION,
             messages = [{ role:'user', content: user message }],
-            providerOptions.openai.instructions = XML format instructions,
-            headers: { 'X-Assistant-Entrypoint': 'natural-language-to-mql' }
+            providerOptions.openai = {
+              instructions = XML format instructions,
+              store: false,
+              metadata: { analytics_id, sensitive_storage }
+            },
+            headers: {
+              'X-Client-Request-Id': requestId,
+              'X-Assistant-Entrypoint': 'natural-language-to-mql'
+            }
           )
           → Atlas Knowledge Server
         → parseXmlToJsonResponse()   ← parses <filter>…</filter> etc.
@@ -351,11 +376,12 @@ The "Generate Mock Data Script" flow is accessible from the **Documents tab tool
 
 The menu item "Generate mock data script" is shown only when all of the following conditions are met (enforced in `packages/compass-collection/src/components/collection-tab.tsx`):
 - The connection has `atlasMetadata` (Atlas-only feature)
-- The collection is not read-only (not a view)
+- The collection is not read-only (not a view — checked via both `isReadonly` and `sourceName`)
 - The collection is not a time-series collection
 - The schema has been analyzed (`hasSchemaAnalysisData`)
 - The schema nesting depth does not exceed `MAX_COLLECTION_NESTING_DEPTH`
-- The user is assigned to the mock data generator experiment (`ExperimentTestNames.mockDataGenerator`)
+
+**Experiment gating (indirect):** The `ExperimentTestNames.mockDataGenerator` experiment controls whether **background schema analysis is triggered automatically** when opening a collection (`shouldRunSchemaAnalysis` in `packages/compass-collection/src/stores/collection-tab.ts`). It is *not* a direct gating condition on the menu item's visibility. The menu item appears whenever `hasSchemaAnalysisData` is true — schema data may have been collected in a previous session or via any other code path. In practice, without being assigned to the experiment variant, schema analysis will not be triggered automatically, so `hasSchemaAnalysisData` will typically be `false`.
 
 Clicking the menu item emits `open-mock-data-generator-modal` on the local app registry, which opens the `MockDataGeneratorModal` in `packages/compass-collection/src/components/mock-data-generator-modal/`.
 
@@ -435,8 +461,14 @@ User clicks "Generate mock data script" → "Add Data" menu → Documents tab to
                       messages = [{ role:'user', content: formatSchemaForPrompt(...) }],
                       tools = { mockDataSchema: mockDataTool },
                       toolChoice = { type:'tool', toolName:'mockDataSchema' },
-                      providerOptions.openai.instructions = MOCK_DATA_SCHEMA_PROMPT,
-                      headers: { 'X-Assistant-Entrypoint': 'mock-data-generator' }
+                      providerOptions.openai = {
+                        instructions = MOCK_DATA_SCHEMA_PROMPT,
+                        store: false
+                      },
+                      headers: {
+                        'X-Client-Request-Id': requestId,
+                        'X-Assistant-Entrypoint': 'mock-data-generator'
+                      }
                     )
                     → Atlas Knowledge Server
                   → toolCalls[0].input  (Zod-validated MockDataSchemaToolOutput)
@@ -493,28 +525,63 @@ For **connection-specific questions** (e.g., "what collections are in my databas
 
 ## How Both Models Reach the Backend
 
-Both models are instantiated with `createOpenAI()` from `@ai-sdk/openai` using the same pattern:
+Both models use `createOpenAI()` from `@ai-sdk/openai` with the same placeholder URL trick, but they differ in how they authenticate:
+
+### SLIM model (`atlas-ai-service.ts`)
 
 ```ts
-createOpenAI({
+// packages/compass-generative-ai/src/atlas-ai-service.ts
+const PLACEHOLDER_BASE_URL = 'http://PLACEHOLDER_BASE_URL_TO_BE_REPLACED.invalid';
+
+this.nlqAiModel = createOpenAI({
   apiKey: '',
-  baseURL: 'http://PLACEHOLDER_BASE_URL_TO_BE_REPLACED.invalid',
+  baseURL: PLACEHOLDER_BASE_URL,
   fetch: (url, init) => {
-    // Replace placeholder with the live endpoint at call-time
     const uri = String(url).replace(
       PLACEHOLDER_BASE_URL,
-      atlasService.assistantApiEndpoint()
+      this.atlasService.assistantApiEndpoint()
     );
-    return atlasService.authenticatedFetch(uri, init);
+    return this.atlasService.authenticatedFetch(uri, init);  // adds ******
   },
-}).responses(AI_MODEL_SLIM_VERSION /* or CHAT */);
+}).responses(AI_MODEL_SLIM_VERSION);
 ```
 
-Key points:
+`atlasService.authenticatedFetch()` calls `authService.getAuthHeaders()` to obtain a `Bearer` token and injects it as an `Authorization` header on every request.
 
-- **Placeholder base URL**: `createOpenAI()` does not allow changing `baseURL` after construction. The placeholder trick lets the actual endpoint be resolved dynamically on every request — important because the Atlas endpoint can change during a session.
-- **`atlasService.authenticatedFetch()`**: injects the user's Atlas authentication token on every request. Neither model is called with a direct OpenAI API key.
-- **OpenAI Responses API** (`.responses(modelId)`): both models use the OpenAI Responses API format rather than the Chat Completions format. The `developer` role in messages is transparently mapped to `system` before dispatch, since the MongoDB backend does not yet support the `developer` role.
+### CHAT model (`compass-assistant-provider.tsx`)
+
+```ts
+// packages/compass-assistant/src/compass-assistant-provider.tsx
+const initialBaseUrl = 'http://PLACEHOLDER_BASE_URL_TO_BE_REPLACED.invalid';
+
+createOpenAI({
+  baseURL: initialBaseUrl,
+  apiKey: '',
+  fetch(url, init) {
+    // Temporary: rewrite developer role → system (backend limitation)
+    if (init?.body) {
+      const body = JSON.parse(init.body as string);
+      body.input = body.input.map((msg: any) =>
+        msg.role === 'developer' ? { ...msg, role: 'system' } : msg
+      );
+      init.body = JSON.stringify(body);
+    }
+    return globalThis.fetch(
+      String(url).replace(initialBaseUrl, atlasService.assistantApiEndpoint()),
+      init
+    );  // no auth headers added by client
+  },
+}).responses(AI_MODEL_CHAT_VERSION)
+```
+
+The CHAT model uses `globalThis.fetch` — **no auth headers are added by the Compass client**. Authentication for the assistant chat endpoint relies on the runtime session context (browser cookies in Atlas Data Explorer, or the Electron session in standalone Compass).
+
+### Common points
+
+- **Placeholder base URL**: `createOpenAI()` does not allow changing `baseURL` after construction. The placeholder is replaced dynamically at call-time, so the latest value of `atlasService.assistantApiEndpoint()` is always used.
+- **No direct OpenAI API key**: neither model is called with a real OpenAI key (`apiKey: ''`). All traffic goes to the MongoDB Knowledge Server, not OpenAI directly.
+- **OpenAI Responses API** (`.responses(modelId)`): both models use the OpenAI Responses API format rather than the Chat Completions format.
+- **`store: false`** in `providerOptions.openai`: both models explicitly set `store: false` to prevent the backend from attempting to persist conversation data in OpenAI's storage.
 
 ---
 
@@ -550,9 +617,10 @@ packages/
 
   compass-collection/
     src/
-      modules/collection-tab.ts                          ← generateFakerMappings thunk (SLIM)
+      modules/collection-tab.ts                          ← generateFakerMappings thunk, Redux store for mock data (SLIM)
+      stores/collection-tab.ts                           ← experiment assignment + shouldRunSchemaAnalysis
       components/
-        collection-tab.tsx                               ← mock data eligibility logic
+        collection-tab.tsx                               ← mock data eligibility logic (isMockDataGeneratorEligibleAndSchemaReady)
         mock-data-generator-modal/                       ← 3-step modal UI
         collection-header/collection-header.tsx          ← MockDataGeneratorModal mount point
 
@@ -572,7 +640,7 @@ packages/
 | **State** | Stateful (full conversation history every turn) | Stateless (single prompt/response, no history) |
 | **Reasoning** | Yes | No |
 | **Transport** | `DocsProviderTransport` → `streamText` | Direct `streamText` (via `getAiQueryResponse` or `generateSchemaForSingleChunk`) |
-| **Backend auth** | `atlasService.authenticatedFetch` | `atlasService.authenticatedFetch` |
+| **Backend auth** | `globalThis.fetch` (session-based; no explicit auth header from client) | `atlasService.authenticatedFetch()` — injects `Authorization: ****** |
 | **`search_content` (RAG)** | Always instructed to call it (backend tool) | Never used |
 | **Client-side tools** | MCP database tools (when tool calling enabled) | Forced `mockDataSchema` tool call only (mock data); no tools for NLQ |
 | **Conversational use** | Yes — full multi-turn chat | No — each call is independent |
