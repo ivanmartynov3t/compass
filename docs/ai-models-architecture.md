@@ -89,7 +89,7 @@ Powers the Compass AI assistant drawer — a side-panel chat that users interact
    - Any registered MCP tools (see below)
    - Headers: `X-Request-Origin`, `X-Client-Request-Id`
 
-3. **Tool calling.** When tool calling is enabled, a `ToolsController` starts an in-memory MCP (Model Context Protocol) server backed by `mongodb-mcp-server`. The assistant can invoke read-only database tools (`find`, `aggregate`, `count`, `list-databases`, `list-collections`, `collection-schema`, `collection-indexes`, `collection-storage-size`, `db-stats`, `explain`, `mongodb-logs`) as well as context-aware tools (`get-current-query`, `get-current-pipeline`). The LLM decides when to call tools; the user can approve or deny destructive operations before they execute. Tool calling is gated behind **three** preferences: `enableToolCalling` (feature flag with `atlasCloudFeatureScope: 'group'`, `stage: 'released'`), `enableGenAIToolCalling` (user-facing toggle in Settings, default `false`), and `enableGenAIToolCallingAtlasProject` (CLI/global flag, default `true`). The full condition evaluated before each message send is:
+3. **Tool calling.** When tool calling is enabled, a `ToolsController` starts an in-memory MCP (Model Context Protocol) server backed by `mongodb-mcp-server`. The assistant can invoke read-only database tools (`find`, `aggregate`, `count`, `list-databases`, `list-collections`, `collection-schema`, `collection-indexes`, `collection-storage-size`, `db-stats`, `explain`, `mongodb-logs`) as well as context-aware tools (`get-current-query`, `get-current-pipeline`). All registered tools are declared `readOnly: true` in the MCP server config (`tools-controller.ts` line 101) — none are write operations. Every tool call is declared with `needsApproval: true` (`tools-controller.ts` lines 150, 169, 210), so the user must confirm each invocation before it executes. Tool calling is gated behind **three** preferences: `enableToolCalling` (feature flag with `atlasCloudFeatureScope: 'group'`, `stage: 'released'`), `enableGenAIToolCalling` (user-facing toggle in Settings, **default `true`** — `preferences-schema.tsx` line 989: `z.boolean().default(true)`), and `enableGenAIToolCallingAtlasProject` (CLI/global flag, default `true`). The full condition evaluated before each message send is:
    ```ts
    const enableToolCalling = prefs.enableToolCalling;
    const enableGenAIToolCalling = prefs.enableGenAIToolCallingAtlasProject && prefs.enableGenAIToolCalling;
@@ -264,21 +264,32 @@ The `enableChatbotEndpointForGenAI` preference flag is `stage: 'released'`, whic
 
 Prompts are built in `packages/compass-generative-ai/src/utils/gen-ai-prompt.ts`.
 
-The **user message** (sent as `messages[0].content`) contains:
+The **user message** (`messages[0].content`) is assembled by `buildUserPromptForQuery()`
+(lines 98–173). Fields are added in order: database name, collection name, schema, sample
+documents (conditional), then the query request. The exact output looks like:
+
 ```
 Database name: "<db>"
 Collection name: "<collection>"
 Schema from a sample of documents from the collection:
 ```
-<user_schema>{ field: type, ... }</user_schema>
+<user_schema>{ field: 'BSONType', ... }</user_schema>
 ```
 Sample documents from the collection:
 ```
-<sample_documents>[…]</sample_documents>
+<sample_documents>[
+  { _id: ObjectId('…'), field: value, … }
+]</sample_documents>
 ```
 Write a query [or: Generate an aggregation] that does the following:
-<user_prompt>{escaped user input}</user_prompt>
+<user_prompt>{XML-escaped user input}</user_prompt>
 ```
+
+**Serialisation format for sample documents:** `toJSString()` from `mongodb-query-parser`
+(line 133) — produces **MongoDB shell syntax**, not JSON or EJSON. For example,
+`ObjectId` values appear as `ObjectId('…')` rather than `{"$oid":"…"}`.
+The schema is serialised the same way via `toJSString(flattenSchemaToObject(schema))` (line 121),
+producing `{ fieldName: 'BSONTypeName' }` objects with no document values.
 
 The **system instructions** string (`providerOptions.openai.instructions`) varies by type:
 
@@ -324,9 +335,15 @@ Key constraints imposed:
 
 #### Prompt size management
 
-The total prompt is capped at ~250 k characters (`MAX_TOTAL_PROMPT_LENGTH` in `gen-ai-prompt.ts`), matching the SLIM model's context window:
-1. If `schema + sampleDocuments` exceeds the limit, sample documents are trimmed to 1.
-2. If still too large, an `AiChatbotPromptTooLargeError` is thrown and the user sees a friendly error.
+The total prompt is capped at `MAX_TOTAL_PROMPT_LENGTH = 250_000` characters
+(`gen-ai-prompt.ts:6`). The trimming logic (`gen-ai-prompt.ts:128–171`) works as follows:
+1. Attempt to include all fetched documents (`sampleDocumentsStr`). If the prompt fits, use them.
+2. If not, fall back to the first document only (`MIN_SAMPLE_DOCUMENTS = 1`,
+   `gen-ai-prompt.ts:7`). If the prompt fits with one document, use it.
+3. If neither fits (i.e. the documents are omitted entirely) and the base prompt (schema +
+   user input) is still over the limit, an `AiChatbotPromptTooLargeError` is thrown and the
+   user sees: *"Sorry, your request is too large. Please use a smaller prompt or try using
+   this feature on a collection with smaller documents."*
 
 #### Data flow
 
@@ -581,7 +598,7 @@ The CHAT model uses `globalThis.fetch` — **no auth headers are added by the Co
 - **Placeholder base URL**: `createOpenAI()` does not allow changing `baseURL` after construction. The placeholder is replaced dynamically at call-time, so the latest value of `atlasService.assistantApiEndpoint()` is always used.
 - **No direct OpenAI API key**: neither model is called with a real OpenAI key (`apiKey: ''`). All traffic goes to the MongoDB Knowledge Server, not OpenAI directly.
 - **OpenAI Responses API** (`.responses(modelId)`): both models use the OpenAI Responses API format rather than the Chat Completions format.
-- **`store: false`** in `providerOptions.openai`: both models explicitly set `store: false` to prevent the backend from attempting to persist conversation data in OpenAI's storage.
+- **`store: false`** in `providerOptions.openai`: both models explicitly set `store: false`. For the CHAT model this is primarily a client-side SDK workaround (EAI-1506): when `store: true` is set, the AI SDK converts prior assistant messages to `{ type: 'item_reference', id: itemId }` stubs to reduce payload size, but the MongoDB Knowledge Server backend relies on full message content and does not forward a valid `itemId` back to the client. Setting `store: false` prevents the SDK from performing that compression. Separately, the backend does not forward `store: true` to OpenAI, so no conversation data is retained at the OpenAI layer regardless of this flag. For the SLIM model the primary intent is to prevent any attempt to persist the generated query in OpenAI's storage. (`docs-provider-transport.ts` line 125, `gen-ai-response.ts` line 23)
 
 ---
 
@@ -640,7 +657,7 @@ packages/
 | **State** | Stateful (full conversation history every turn) | Stateless (single prompt/response, no history) |
 | **Reasoning** | Yes | No |
 | **Transport** | `DocsProviderTransport` → `streamText` | Direct `streamText` (via `getAiQueryResponse` or `generateSchemaForSingleChunk`) |
-| **Backend auth** | `globalThis.fetch` (session-based; no explicit auth header from client) | `atlasService.authenticatedFetch()` — injects `Authorization: ****** |
+| **Backend auth** | `globalThis.fetch` (session-based; no explicit auth header from client) | `atlasService.authenticatedFetch()` → `authService.getAuthHeaders()` → `Authorization: ****** token>` |
 | **`search_content` (RAG)** | Always instructed to call it (backend tool) | Never used |
 | **Client-side tools** | MCP database tools (when tool calling enabled) | Forced `mockDataSchema` tool call only (mock data); no tools for NLQ |
 | **Conversational use** | Yes — full multi-turn chat | No — each call is independent |
