@@ -66,6 +66,38 @@ which expose connection information honor this setting.
 
 <!-- Source File: `packages/compass-e2e-tests/tests/protect-connection-strings.test.ts` -->
 
+## Kerberos Password Field Visibility Tests
+
+Compass supports Kerberos (GSSAPI) authentication, which optionally accepts
+a Kerberos password for specific deployment configurations. By default,
+this field is hidden to minimise credential exposure in the connection form.
+These tests verify that the field is hidden when the feature flag is disabled
+and visible when it is explicitly enabled by an administrator, ensuring that
+credentials are not presented to users unless intentionally configured.
+
+<!-- Source File: `packages/compass-e2e-tests/tests/show-kerberos-password-field.test.ts` -->
+
+## Connection String Credential Redaction Tests
+
+Compass provides a setting that prevents the application from displaying
+credentials in connection strings, to avoid accidental leakage to
+bystanders or screenshots. These tests verify that when this protection
+is active, credentials are fully redacted from the displayed connection
+string, while the connection string is passed through unmodified when
+the protection is not active.
+
+<!-- Source File: `packages/compass-maybe-protect-connection-string/src/index.spec.ts` -->
+
+## Sensitive Preferences Encryption Tests
+
+Compass persists user preferences to disk, some of which contain sensitive
+information such as proxy passwords and SSH private key passphrases.
+These tests verify that sensitive preference fields are encrypted at rest:
+non-secret values remain readable on disk, while secrets such as passwords
+and passphrases are never stored in plaintext.
+
+<!-- Source File: `packages/compass-preferences-model/src/preferences-persistent-storage.spec.ts` -->
+
 ## Automatic Connection Establishment Tests
 
 Since this application accepts remote host connection information on the command line,
@@ -96,3 +128,14 @@ We ensure that when sensitive information is persisted, in particular database a
 it is cryptographically protected through an OS keychain encryption integration.
 
 <!-- Source File: `packages/connection-info/src/connection-secrets.spec.ts` -->
+
+## In-Use Encryption Re-Encryption Assurance Tests
+
+MongoDB's In-Use Encryption features allow data to be stored and retrieved
+in encrypted form. A critical security property is that when decrypted data
+is written back into the database, it must always be re-encrypted —
+never sent in plaintext. These tests verify that the CSFLE collection
+tracker correctly enforces this invariant, preventing accidental plaintext
+exposure of data that the user intended to keep encrypted.
+
+<!-- Source File: `packages/data-service/src/csfle-collection-tracker.spec.ts` -->
