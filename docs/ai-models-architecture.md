@@ -373,7 +373,7 @@ The `generateFakerMappings` thunk in `packages/compass-collection/src/modules/co
 
 2. For **small schemas** (≤ 30 fields): a single call to `generateSchemaForSingleChunk()` is made.
 
-3. For **large schemas** (> 30 fields, up to 450 fields max): `splitSchemaIntoChunks()` breaks the schema into 30-field chunks, all chunks are processed concurrently via `Promise.all()`, and results are merged with `mergeChunkResponses()`.
+3. For **large schemas** (> 30 fields, up to 450 fields max — 15 chunks × 30 fields): `splitSchemaIntoChunks()` breaks the schema into 30-field chunks (constant `FIELDS_PER_CHUNK`), all chunks are processed concurrently via `Promise.all()`, and results are merged with `mergeChunkResponses()`. If the schema exceeds 450 fields (`MAX_CHUNKS × FIELDS_PER_CHUNK`), `validateSchemaSize()` throws and the user sees: *"The provided schema is too large to process. Please reduce the schema size and try again."*
 
 4. Each chunk call uses `streamText()` with **forced tool calling**:
    ```ts
@@ -399,7 +399,7 @@ The prompt is approximately 500 lines of detailed instructions. Key sections:
 - `fieldPath` must exactly match the schema field key (dot notation for nested, `[]` for arrays). No modification or shortening.
 - Faker method must be a valid `faker.js ^10.4.0` method in `<module>.<method>` format.
 - Extensive mapping tables from MongoDB types to faker methods (String, Number, Date, ObjectId, Boolean, Binary, GeoJSON, etc.).
-- **GeoJSON coordinates**: must use `location.latitude` (range `[-90, 90]`), never `location.longitude` — because the generator calls the same method for both array slots, and longitude range `[-180, 180]` would break latitude validation.
+- **GeoJSON coordinates**: must use `location.latitude` (range `[-90, 90]`), never `location.longitude` — the mock data generator calls the chosen faker method once per element in a coordinate array, so the same method is called for both the longitude slot (index 0) and the latitude slot (index 1). If `location.longitude` (range `[-180, 180]`) were used, roughly half of its output values would fall outside the valid latitude range of `[-90, 90]`, causing MongoDB to reject the insert with `Longitude/latitude is out of bounds`. Using `location.latitude` (which stays within `[-90, 90]`) is valid for both slots.
 - **Type vs name conflicts**: field's declared type is authoritative (e.g., a `Number`-typed field named `createdAt` must use `number.int`, not `date.past`).
 - **Array fields**: use `helpers.arrayElement`, never `helpers.arrayElements` (generator handles the array dimension by calling the method N times).
 - `fakerArgs` must always be an array; object/array arguments use `{"json": "<escaped JSON string>"}` format.
@@ -427,7 +427,7 @@ User clicks "Generate mock data script" → "Add Data" menu → Documents tab to
                includeSampleValues (per enableGenAISampleDocumentPassing pref),
                databaseName, collectionName, signal
              )
-            → if schema > 30 fields: splitSchemaIntoChunks() (30 fields/chunk, max 15 chunks)
+            → if schema > 30 fields: splitSchemaIntoChunks() (30 fields/chunk, max 15 chunks = 450 fields)
             → Promise.all(chunks.map(chunk =>
                 generateSchemaForSingleChunk(this.mockDataAiModel)
                   → streamText(
