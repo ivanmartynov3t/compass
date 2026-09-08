@@ -9,10 +9,9 @@ export const sharedExternals: string[] = [
   // externalize them from the bulid
   // TODO: It would be nice to automate that so we don't need to maintain this
   // list ourselves
-  'keytar',
   'kerberos',
   'interruptor',
-  'native-machine-id',
+  '@mongodb-js/native-machine-id',
   'os-dns-native',
   'system-ca',
   'win-export-certificate-and-key',

@@ -4,32 +4,25 @@ import { AtlasService } from './atlas-service';
 import type { PreferencesAccess } from 'compass-preferences-model';
 import { createSandboxFromDefaultPreferences } from 'compass-preferences-model';
 import { createNoopLogger } from '@mongodb-js/compass-logging/provider';
-import { CompassAtlasAuthService } from './compass-atlas-auth-service';
 import type { AtlasServiceConfig } from './util';
 
 const ATLAS_CONFIG: AtlasServiceConfig = {
   ccsBaseUrl: 'ws://example.com',
   multiplexedWsBaseUrls: ['ws://example.com/multiplex'],
   cloudBaseUrl: 'ws://example.com/cloud',
-  atlasApiBaseUrl: 'http://example.com/api',
+  atlasUiBaseUrl: 'https://example.com',
+  atlasPrivateApiBaseUrl: 'http://example.com/api/private',
+  atlasAdminApiBaseUrl: 'http://example.com/api/atlas',
   atlasLogin: {
     clientId: 'some-client-id',
     issuer: 'http://example.com/oauth2/default',
   },
-  authPortalUrl: 'http://example.com/account/login',
   assistantApiBaseUrl: 'http://example.com/assistant',
   userDataBaseUrl: 'http://example.com/ui/userData',
 };
 
-function getAtlasService(
-  preferences: PreferencesAccess,
-  getAuthHeadersFn?: () => Promise<Record<string, string>>
-) {
-  const authService = new CompassAtlasAuthService();
-  authService['getAuthHeaders'] = getAuthHeadersFn as any;
-
+function getAtlasService(preferences: PreferencesAccess) {
   const atlasService = new AtlasService(
-    authService,
     preferences,
     createNoopLogger(),
     undefined,
@@ -119,10 +112,7 @@ describe('AtlasService', function () {
       json: () => Promise.resolve(expectedData),
     });
     global.fetch = fetchStub;
-    const getAuthHeadersFn = sandbox.stub().resolves({
-      Authorization: 'Bearer super-secret',
-    });
-    const atlasService = getAtlasService(preferences, getAuthHeadersFn);
+    const atlasService = getAtlasService(preferences);
     const response = await atlasService.authenticatedFetch(
       'https://example.com'
     );
@@ -132,10 +122,9 @@ describe('AtlasService', function () {
     expect(data).to.deep.equal(expectedData);
 
     expect(fetchStub.firstCall.args[1].headers).to.have.property(
-      'Authorization',
-      'Bearer super-secret'
+      'X-Compass-Auth',
+      'true'
     );
-    expect(getAuthHeadersFn.calledOnce).to.be.true;
   });
 
   it('should set CSRF headers when available', async function () {

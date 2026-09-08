@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const attempts = [
   [() => require('interruptor'), 'interruptor'],
-  [() => require('keytar'), 'keytar'],
   [() => require('kerberos'), 'kerberos'],
   [() => require('os-dns-native'), 'os-dns-native'],
-  [() => require('native-machine-id'), 'native-machine-id'],
+  [
+    () => require('@mongodb-js/native-machine-id'),
+    '@mongodb-js/native-machine-id',
+  ],
   [
     () =>
       process.platform === 'win32' && require('win-export-certificate-and-key'),

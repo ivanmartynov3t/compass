@@ -14,9 +14,9 @@ import {
 import { DrawerContentProvider } from './drawer-portal';
 import { CopyPasteContextMenu } from '../hooks/use-copy-paste-context-menu';
 import {
-  type LegacyUUIDDisplay,
-  LegacyUUIDDisplayContext,
-} from './document-list/legacy-uuid-format-context';
+  type BSONDisplayOptions,
+  BSONDisplayOptionsProvider,
+} from './document-list/bson-display-options-context';
 
 type GuideCueProviderProps = React.ComponentProps<typeof GuideCueProvider>;
 
@@ -26,7 +26,8 @@ type CompassComponentsProviderProps = {
    * value will be derived from the system settings
    */
   darkMode?: boolean;
-  legacyUUIDDisplayEncoding?: LegacyUUIDDisplay;
+  legacyUUIDDisplayEncoding?: BSONDisplayOptions['legacyUUIDDisplayEncoding'];
+  timezone?: BSONDisplayOptions['timezone'];
   popoverPortalContainer?: HTMLElement;
   /**
    * Either React children or a render callback that will get the darkMode
@@ -47,15 +48,11 @@ type CompassComponentsProviderProps = {
   stackedElementsZIndex?: number;
 
   /**
-   * Set to disable context menus in the application.
-   */
-  disableContextMenus?: boolean;
-
-  /**
    * Set to disable guide cues in the application
    */
   disableGuideCues?: boolean;
 } & {
+  onGuideCueShown?: GuideCueProviderProps['onShow'];
   onNextGuideGue?: GuideCueProviderProps['onNext'];
   onNextGuideCueGroup?: GuideCueProviderProps['onNextGroup'];
 } & {
@@ -130,6 +127,8 @@ export const CompassComponentsProvider = ({
   darkMode: _darkMode,
   children,
   legacyUUIDDisplayEncoding,
+  timezone,
+  onGuideCueShown,
   onNextGuideGue,
   onNextGuideCueGroup,
   onContextMenuOpen,
@@ -140,7 +139,6 @@ export const CompassComponentsProvider = ({
   utmMedium,
   stackedElementsZIndex,
   popoverPortalContainer: _popoverPortalContainer,
-  disableContextMenus,
   disableGuideCues,
   ...signalHooksProviderProps
 }: CompassComponentsProviderProps) => {
@@ -167,8 +165,9 @@ export const CompassComponentsProvider = ({
       darkMode={darkMode}
       popoverPortalContainer={popoverPortalContainer}
     >
-      <LegacyUUIDDisplayContext.Provider
-        value={legacyUUIDDisplayEncoding ?? ''}
+      <BSONDisplayOptionsProvider
+        legacyUUIDDisplayEncoding={legacyUUIDDisplayEncoding}
+        timezone={timezone}
       >
         <DrawerContentProvider
           onDrawerSectionOpen={onDrawerSectionOpen}
@@ -180,6 +179,7 @@ export const CompassComponentsProvider = ({
               utmMedium={utmMedium}
             >
               <GuideCueProvider
+                onShow={onGuideCueShown}
                 onNext={onNextGuideGue}
                 onNextGroup={onNextGuideCueGroup}
                 disabled={disableGuideCues}
@@ -187,7 +187,6 @@ export const CompassComponentsProvider = ({
                 <SignalHooksProvider {...signalHooksProviderProps}>
                   <ConfirmationModalArea>
                     <ContextMenuProvider
-                      disabled={disableContextMenus}
                       onContextMenuOpen={onContextMenuOpen}
                       onContextMenuItemClick={onContextMenuItemClick}
                     >
@@ -209,7 +208,7 @@ export const CompassComponentsProvider = ({
             </RequiredURLSearchParamsProvider>
           </StackedComponentProvider>
         </DrawerContentProvider>
-      </LegacyUUIDDisplayContext.Provider>
+      </BSONDisplayOptionsProvider>
     </LeafyGreenProvider>
   );
 };

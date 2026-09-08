@@ -21,12 +21,44 @@ import {
   type AssistantMessage,
 } from '../compass-assistant-provider';
 import sinon from 'sinon';
-import type { ChatTransport, SourceUrlUIPart, TextPart } from 'ai';
+import type { SourceUrlUIPart, TextPart, ToolUIPart } from 'ai';
+import type { AtlasAdminApiService } from '@mongodb-js/atlas-admin-api/provider';
 import { Chat } from '../@ai-sdk/react/chat-react';
 import {
   ToolsControllerProvider,
   ToolsController,
 } from '@mongodb-js/compass-generative-ai/provider';
+import {
+  ExperimentTestGroups,
+  type ExperimentTestGroup,
+} from '@mongodb-js/compass-telemetry';
+import { AtlasAuthPlugin } from '@mongodb-js/atlas-service/renderer';
+import { containsText } from './test-helpers';
+
+const AtlasLoginPlugin = AtlasAuthPlugin.withMockServices({});
+
+const mockAtlasAdminApi = {
+  getSystemStatus: sinon.stub().resolves({}),
+} as unknown as AtlasAdminApiService;
+
+function TestProviders({
+  children,
+  assistantActions,
+}: React.PropsWithChildren<{
+  assistantActions?: Partial<React.ContextType<typeof AssistantActionsContext>>;
+}>) {
+  return (
+    <ToolsControllerProvider>
+      <AtlasLoginPlugin>
+        <AssistantActionsContext.Provider
+          value={{ atlasAdminApi: mockAtlasAdminApi, ...assistantActions }}
+        >
+          {children}
+        </AssistantActionsContext.Provider>
+      </AtlasLoginPlugin>
+    </ToolsControllerProvider>
+  );
+}
 
 describe('AssistantChat', function () {
   const mockMessages: AssistantMessage[] = [
@@ -75,12 +107,14 @@ describe('AssistantChat', function () {
       connections,
       preferences,
       trackingOptions = {},
+      experimentVariant = null,
     }: {
       connections?: ConnectionInfo[];
       preferences?: Partial<AllPreferences>;
       trackingOptions?: {
         requestId?: string;
       };
+      experimentVariant?: ExperimentTestGroup | null;
     } = {}
   ) {
     // The chat component does not use chat.sendMessage() directly, it uses
@@ -94,20 +128,16 @@ describe('AssistantChat', function () {
         await chat.sendMessage(message, options);
       });
 
-    const assistantActionsContext = {
-      ensureOptInAndSend: ensureOptInAndSendStub,
-    };
     const result = render(
-      <ToolsControllerProvider>
-        <AssistantActionsContext.Provider
-          value={assistantActionsContext as any}
-        >
-          <AssistantChat chat={chat} hasNonGenuineConnections={false} />
-        </AssistantActionsContext.Provider>
-      </ToolsControllerProvider>,
+      <TestProviders
+        assistantActions={{ ensureOptInAndSend: ensureOptInAndSendStub }}
+      >
+        <AssistantChat chat={chat} hasNonGenuineConnections={false} />
+      </TestProviders>,
       {
         connections,
         preferences,
+        experimentAssignment: experimentVariant,
       }
     );
     return {
@@ -226,9 +256,9 @@ describe('AssistantChat', function () {
     it('shows warning message in chat when connected to non-genuine MongoDB', function () {
       const chat = createMockChat({ messages: [] });
       render(
-        <ToolsControllerProvider>
+        <TestProviders>
           <AssistantChat chat={chat} hasNonGenuineConnections={true} />
-        </ToolsControllerProvider>
+        </TestProviders>
       );
 
       expect(chat.messages).to.have.length(1);
@@ -243,9 +273,9 @@ describe('AssistantChat', function () {
     it('does not show warning message when all connections are genuine', function () {
       const chat = createMockChat({ messages: [] });
       render(
-        <ToolsControllerProvider>
+        <TestProviders>
           <AssistantChat chat={chat} hasNonGenuineConnections={false} />
-        </ToolsControllerProvider>,
+        </TestProviders>,
         {
           connections: [],
         }
@@ -260,9 +290,9 @@ describe('AssistantChat', function () {
     it('warning message is removed when all active connections are changed to genuine', async function () {
       const chat = createMockChat({ messages: [] });
       const { rerender } = render(
-        <ToolsControllerProvider>
+        <TestProviders>
           <AssistantChat chat={chat} hasNonGenuineConnections={true} />
-        </ToolsControllerProvider>,
+        </TestProviders>,
         {}
       );
 
@@ -273,9 +303,9 @@ describe('AssistantChat', function () {
       ).to.exist;
 
       rerender(
-        <ToolsControllerProvider>
+        <TestProviders>
           <AssistantChat chat={chat} hasNonGenuineConnections={false} />
-        </ToolsControllerProvider>
+        </TestProviders>
       );
 
       await waitFor(() => {
@@ -388,7 +418,7 @@ describe('AssistantChat', function () {
       // Create a chat with the mock transport
       const chat = new Chat<AssistantMessage>({
         messages: [],
-        transport: mockTransport as ChatTransport<AssistantMessage>,
+        transport: mockTransport,
       });
 
       // Create messages with a tool call in progress
@@ -1019,6 +1049,41 @@ describe('AssistantChat', function () {
     });
   });
 
+  describe('Atlas connection-error debugger tool call', function () {
+    function makeAtlasToolCallMessage(
+      state: ToolUIPart['state'] = 'approval-requested',
+      approvalId: string | undefined = 'atlas-approval-1'
+    ): AssistantMessage {
+      return {
+        id: 'atlas-tool-call',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-atlas-connection-error-debugger',
+            toolCallId: 'atlas-tool-call-1',
+            state,
+            approval: approvalId ? { id: approvalId } : undefined,
+          } as unknown as ToolUIPart,
+        ],
+        metadata: { connectionInfo: { id: 'conn-1', name: 'My Cluster' } },
+      };
+    }
+
+    it('renders the Atlas card (not the generic tool-call card) for the debugger tool', function () {
+      renderWithChat(
+        createMockChat({ messages: [makeAtlasToolCallMessage()] })
+      );
+
+      expect(
+        screen.getByText(
+          containsText(
+            'Connect with Atlas and run atlas-connection-error-debugger?'
+          )
+        )
+      ).to.exist;
+    });
+  });
+
   describe('error handling', function () {
     it('displays error banner when error occurs', async function () {
       renderWithChat(createBrokenChat());
@@ -1433,7 +1498,10 @@ describe('AssistantChat', function () {
     it('renders follow-up chips when the experiment is enabled and the response is complete', function () {
       renderWithChat(
         createMockChat({ messages: [assistantMessageWithFollowUps] }),
-        { preferences: { enableSearchActivationProgramP2: true } }
+        {
+          experimentVariant:
+            ExperimentTestGroups.searchActivationProgramP2Variant,
+        }
       );
 
       expect(screen.getByTestId('follow-up-prompt-0')).to.exist;
@@ -1444,8 +1512,7 @@ describe('AssistantChat', function () {
 
     it('does not render follow-up chips when the experiment is disabled', function () {
       renderWithChat(
-        createMockChat({ messages: [assistantMessageWithFollowUps] }),
-        { preferences: { enableSearchActivationProgramP2: false } }
+        createMockChat({ messages: [assistantMessageWithFollowUps] })
       );
 
       expect(screen.queryByTestId('follow-up-prompt-0')).to.not.exist;
@@ -1454,7 +1521,10 @@ describe('AssistantChat', function () {
     it('strips the follow-up section from the displayed message text', function () {
       renderWithChat(
         createMockChat({ messages: [assistantMessageWithFollowUps] }),
-        { preferences: { enableSearchActivationProgramP2: true } }
+        {
+          experimentVariant:
+            ExperimentTestGroups.searchActivationProgramP2Variant,
+        }
       );
 
       expect(screen.getByText('Here is the analysis.')).to.exist;
@@ -1464,7 +1534,10 @@ describe('AssistantChat', function () {
     it('sends the question text when a chip is clicked', async function () {
       const { ensureOptInAndSendStub } = renderWithChat(
         createMockChat({ messages: [assistantMessageWithFollowUps] }),
-        { preferences: { enableSearchActivationProgramP2: true } }
+        {
+          experimentVariant:
+            ExperimentTestGroups.searchActivationProgramP2Variant,
+        }
       );
 
       userEvent.click(screen.getByTestId('follow-up-prompt-0'));

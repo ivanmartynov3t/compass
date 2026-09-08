@@ -75,6 +75,10 @@ export type CollectionDetails = {
     validator: Document;
     validationAction: string;
     validationLevel: string;
+    // Set while a collection is being upgraded to the "constraint" validation
+    // level; it outlives a failed or interrupted upgrade and, like the
+    // "constraint" level itself, locks the validator against changes.
+    prepareConstraintValidationLevel?: boolean;
   } | null;
   inferred_from_privileges: boolean;
 };
@@ -84,7 +88,9 @@ export type DatabaseDetails = {
   name: string;
   collection_count: number;
   document_count: number;
-  storage_size: number;
+  // Undefined when the server did not report it.
+  // DSC filters `storageSize` out of `dbStats` for non-internal users.
+  storage_size?: number;
   data_size: number;
   index_count: number;
   index_size: number;
@@ -399,7 +405,7 @@ export function adaptDatabaseInfo(
     collection_count: databaseStats.collections ?? 0,
     document_count: databaseStats.objects ?? 0,
     index_count: databaseStats.indexes ?? 0,
-    storage_size: databaseStats.storageSize ?? 0,
+    storage_size: databaseStats.storageSize,
     data_size: databaseStats.dataSize ?? 0,
     index_size: databaseStats.indexSize ?? 0,
   };
@@ -434,6 +440,7 @@ export function adaptCollectionInfo({
     validator,
     validationAction,
     validationLevel,
+    prepareConstraintValidationLevel,
     clusteredIndex,
     encryptedFields,
   } = options ?? {};
@@ -460,7 +467,12 @@ export function adaptCollectionInfo({
     clustered: clusteredIndex ? true : false,
     fle2: encryptedFields ? true : false,
     validation: hasValidation
-      ? { validator, validationAction, validationLevel }
+      ? {
+          validator,
+          validationAction,
+          validationLevel,
+          prepareConstraintValidationLevel,
+        }
       : null,
   };
 }

@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { connect } from 'react-redux';
+import type { UserConfigurablePreferences } from 'compass-preferences-model';
 
 import {
   FormModal,
@@ -8,12 +9,12 @@ import {
   focusRing,
 } from '@mongodb-js/compass-components';
 
-import GeneralSettings from './settings/general';
-import { ProxySettings } from './settings/proxy-settings';
-import OIDCSettings from './settings/oidc-settings';
-import GenAISettings from './settings/gen-ai-settings';
-import PrivacySettings from './settings/privacy';
-import ThemeSettings from './settings/theme';
+import GeneralSettings, { generalFields } from './settings/general';
+import { ProxySettings, proxyFields } from './settings/proxy-settings';
+import OIDCSettings, { oidcFields } from './settings/oidc-settings';
+import GenAISettings, { genaiFields } from './settings/gen-ai-settings';
+import PrivacySettings, { privacyFields } from './settings/privacy';
+import ThemeSettings, { themeFields } from './settings/theme';
 import FeaturePreviewSettings, {
   useShouldShowFeaturePreviewSettings,
 } from './settings/feature-preview';
@@ -21,26 +22,28 @@ import Sidebar from './sidebar';
 import type { SettingsTabId } from '../stores/settings';
 import { saveSettings, closeModal, selectTab } from '../stores/settings';
 import type { RootState } from '../stores';
-import { useHasAIFeatureCloudRolloutAccess } from 'compass-preferences-model/provider';
 
 type Settings = {
   tabId: SettingsTabId;
   name: string;
   component: React.ComponentType;
+  preferences: readonly (keyof UserConfigurablePreferences)[];
 };
 
 type SettingsModalProps = {
   isOpen: boolean;
-  isOIDCEnabled: boolean;
   selectedTab: SettingsTabId | undefined;
   onMount?: () => void;
   onClose: () => void;
   onSave: () => void;
   onSelectTab: (tab: SettingsTabId) => void;
   hasChangedSettings: boolean;
+  userConfigurableSettings: Partial<{
+    [key in keyof UserConfigurablePreferences]: unknown;
+  }>;
 };
 
-const contentStyles = css({
+const containerStyles = css({
   display: 'flex',
   height: spacing[7] * 5,
   paddingTop: spacing[200],
@@ -51,14 +54,19 @@ const sideNavStyles = css({
   width: spacing[1600] * 3,
 });
 
-const settingsStyles = css(
+const tabContentStyles = css(
   {
     width: '80%',
     marginLeft: spacing[1600] * 3,
-    padding: `0 ${spacing[200]}px 0 ${spacing[400]}px`,
   },
   focusRing
 );
+
+const contentStyles = css({
+  paddingRight: spacing[200],
+  paddingLeft: spacing[400],
+  paddingBottom: spacing[200],
+});
 
 export const SettingsModal: React.FunctionComponent<SettingsModalProps> = ({
   isOpen,
@@ -67,50 +75,71 @@ export const SettingsModal: React.FunctionComponent<SettingsModalProps> = ({
   onClose,
   onSave,
   onSelectTab,
-  isOIDCEnabled,
   hasChangedSettings,
+  userConfigurableSettings,
 }) => {
-  const aiFeatureHasCloudRolloutAccess = useHasAIFeatureCloudRolloutAccess();
   const onMountRef = useRef(onMount);
 
   useEffect(() => {
     onMountRef.current?.();
   }, []);
 
-  const settings: Settings[] = [
-    { tabId: 'general', name: 'General', component: GeneralSettings },
-    { tabId: 'theme', name: 'Theme', component: ThemeSettings },
-    { tabId: 'privacy', name: 'Privacy', component: PrivacySettings },
-    {
-      tabId: 'proxy',
-      name: 'Proxy Configuration',
-      component: ProxySettings,
-    },
-  ];
-
-  if (isOIDCEnabled) {
-    settings.push({
-      tabId: 'oidc',
-      name: 'OIDC',
-      component: OIDCSettings,
+  const hasFeaturePreviewSettings = useShouldShowFeaturePreviewSettings();
+  const settings: Settings[] = useMemo(() => {
+    const settings: Settings[] = [
+      {
+        tabId: 'general' as SettingsTabId,
+        preferences: generalFields,
+        name: 'General',
+        component: GeneralSettings,
+      },
+      {
+        tabId: 'theme' as SettingsTabId,
+        preferences: themeFields,
+        name: 'Theme',
+        component: ThemeSettings,
+      },
+      {
+        tabId: 'privacy' as SettingsTabId,
+        preferences: privacyFields,
+        name: 'Privacy',
+        component: PrivacySettings,
+      },
+      {
+        tabId: 'proxy' as SettingsTabId,
+        preferences: proxyFields,
+        name: 'Proxy Configuration',
+        component: ProxySettings,
+      },
+      {
+        tabId: 'oidc' as SettingsTabId,
+        preferences: oidcFields,
+        name: 'OIDC',
+        component: OIDCSettings,
+      },
+      {
+        tabId: 'ai' as SettingsTabId,
+        preferences: genaiFields,
+        name: 'Artificial Intelligence',
+        component: GenAISettings,
+      },
+    ].filter((setting) => {
+      return setting.preferences.some((pref) =>
+        Object.hasOwn(userConfigurableSettings, pref)
+      );
     });
-  }
 
-  if (aiFeatureHasCloudRolloutAccess) {
-    settings.push({
-      tabId: 'ai',
-      name: 'Artificial Intelligence',
-      component: GenAISettings,
-    });
-  }
+    if (hasFeaturePreviewSettings) {
+      settings.push({
+        tabId: 'preview',
+        name: 'Feature Preview',
+        preferences: [],
+        component: FeaturePreviewSettings,
+      });
+    }
 
-  if (useShouldShowFeaturePreviewSettings()) {
-    settings.push({
-      tabId: 'preview',
-      name: 'Feature Preview',
-      component: FeaturePreviewSettings,
-    });
-  }
+    return settings;
+  }, [userConfigurableSettings, hasFeaturePreviewSettings]);
 
   selectedTab ??= settings[0].tabId;
   const SettingComponent =
@@ -128,7 +157,7 @@ export const SettingsModal: React.FunctionComponent<SettingsModalProps> = ({
       data-testid="settings-modal"
       minBodyHeight={spacing[1600] * 2}
     >
-      <div className={contentStyles}>
+      <div className={containerStyles}>
         <div className={sideNavStyles}>
           <Sidebar
             activeItem={selectedTab}
@@ -137,14 +166,16 @@ export const SettingsModal: React.FunctionComponent<SettingsModalProps> = ({
           />
         </div>
         <div
-          className={settingsStyles}
+          className={tabContentStyles}
           data-testid="settings-modal-content"
           role="tabpanel"
           tabIndex={0}
           id={`${selectedTab}-section`}
           aria-labelledby={`${selectedTab}-tab`}
         >
-          {SettingComponent && <SettingComponent />}
+          <div className={contentStyles}>
+            {SettingComponent && <SettingComponent />}
+          </div>
         </div>
       </div>
     </FormModal>
@@ -156,9 +187,9 @@ export default connect(
     return {
       isOpen:
         state.settings.isModalOpen && state.settings.loadingState === 'ready',
-      isOIDCEnabled: !!state.settings.settings.enableOidc,
       hasChangedSettings: state.settings.updatedFields.length > 0,
       selectedTab: state.settings.tab,
+      userConfigurableSettings: state.settings.settings,
     };
   },
   {

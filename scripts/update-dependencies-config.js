@@ -21,7 +21,11 @@ module.exports = {
     'eslint-plugin-react',
     'eslint-plugin-react-hooks',
   ],
-  typescript: ['@microsoft/api-extractor', 'typescript', 'ts-node'],
+  typescript: [
+    '@microsoft/api-extractor',
+    'typescript@6', // TODO: update to 7+ (latest) when its more stable and feature complete
+    'ts-node',
+  ],
   leafygreen: [
     '@emotion/*',
     '@leafygreen-ui/*',
@@ -45,16 +49,17 @@ module.exports = {
     '@mongodb-js/mongodb-constants',
     '@mongodb-js/device-id',
     '@mongodb-js/shell-bson-parser',
+    '@mongodb-js/native-machine-id',
     'mongodb-cloud-info',
     'mongodb-query-parser',
   ],
   'devtools-shared-dev': [
     '@mongodb-js/dl-center',
     '@mongodb-js/mongodb-downloader',
+    '@mongodb-js/mongodb-runner',
     '@mongodb-js/monorepo-tools',
     '@mongodb-js/sbom-tools',
     '@mongodb-js/signing-utils',
-    'mongodb-runner',
   ],
   'webpack-config': [
     '@babel/core',

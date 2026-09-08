@@ -12,6 +12,7 @@ import {
 import type { Compass } from '../helpers/compass.ts';
 import { expect } from 'chai';
 import { type Db, MongoClient } from 'mongodb';
+import { isTestingWebAtlasCloud } from '../helpers/test-runner-context.ts';
 
 type Connection = {
   name: string;
@@ -21,11 +22,9 @@ type Connection = {
 const connectionsWithNoSearchSupport: Connection[] = [
   {
     name: 'Local Connection',
-    connectionString: getDefaultConnectionStrings(0),
-  },
-  {
-    name: 'Atlas Free Cluster',
-    connectionString: process.env.E2E_TESTS_ATLAS_CS_WITHOUT_SEARCH,
+    connectionString: isTestingWebAtlasCloud()
+      ? undefined
+      : getDefaultConnectionStrings(0),
   },
 ];
 const connectionsWithSearchSupport: Connection[] = [
@@ -227,10 +226,7 @@ describe('Search Indexes', function () {
         await browser.dropIndex(indexName);
       });
 
-      // TODO(COMPASS-8220): Un-skip this test
-      (name === 'Atlas Free Cluster'
-        ? it.skip
-        : it)('renders search indexes tab disabled', async function () {
+      it('renders search indexes tab disabled', async function () {
         const searchTab = browser.$(
           Selectors.indexesSegmentedTab('search-indexes')
         );

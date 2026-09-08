@@ -10,19 +10,7 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import type { ToolUIPart } from 'ai';
 import type { BasicConnectionInfo } from '../compass-assistant-provider';
-
-function containsText(match: string) {
-  return (_: unknown, element: Element | null): boolean => {
-    // this only works for <>text <tag>more text</tag></> but that's sufficient for now
-    const firstChild = element?.firstChild;
-    if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
-      // only check elements that start with text so we don't match on nested elements
-      return element?.textContent === match;
-    }
-
-    return false;
-  };
-}
+import { containsText } from './test-helpers';
 
 describe('ToolCallMessage', function () {
   const defaultConnection: BasicConnectionInfo = {
@@ -65,7 +53,7 @@ describe('ToolCallMessage', function () {
       expect(toolName).to.exist;
 
       // InlineDefinition is used for tools with descriptions
-      // list-databases should have a description from AVAILABLE_TOOLS
+      // list-databases should have a description from getAvailableTools
       userEvent.hover(toolName);
       await waitFor(() => {
         const description = screen.getByText(
@@ -114,6 +102,19 @@ describe('ToolCallMessage', function () {
       const toolCall: ToolUIPart = {
         ...baseToolCall,
         type: 'tool-get-current-query',
+      };
+
+      render(
+        <ToolCallMessage connection={defaultConnection} toolCall={toolCall} />
+      );
+
+      expect(screen.queryByText(defaultConnection.name)).to.not.exist;
+    });
+
+    it('does not display connection chip for atlas-connection-error-debugger', function () {
+      const toolCall: ToolUIPart = {
+        ...baseToolCall,
+        type: 'tool-atlas-connection-error-debugger',
       };
 
       render(
@@ -422,6 +423,24 @@ describe('ToolCallMessage', function () {
         <ToolCallMessage
           connection={defaultConnection}
           toolCall={runningTool}
+        />
+      );
+
+      expect(screen.queryByText('Run')).to.not.exist;
+      expect(screen.queryByText('Cancel')).to.not.exist;
+    });
+
+    it('does not show action buttons when there is no approval id', function () {
+      const approvalTool = {
+        ...baseToolCall,
+        state: 'approval-requested',
+        approval: undefined,
+      } as unknown as ToolUIPart;
+
+      render(
+        <ToolCallMessage
+          connection={defaultConnection}
+          toolCall={approvalTool}
         />
       );
 

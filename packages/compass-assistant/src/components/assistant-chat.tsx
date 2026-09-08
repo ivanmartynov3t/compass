@@ -20,7 +20,11 @@ import {
 } from '@mongodb-js/compass-components';
 import { ConfirmationMessage } from './confirmation-message';
 import { ToolCallMessage } from './tool-call-message';
-import { useTelemetry } from '@mongodb-js/compass-telemetry/provider';
+import { AtlasToolCallMessage } from './atlas-tool-call-message';
+import {
+  useTelemetry,
+  useSearchActivationProgramP2,
+} from '@mongodb-js/compass-telemetry/provider';
 import { NON_GENUINE_WARNING_MESSAGE } from '../preset-messages';
 import { SuggestedPrompts } from './suggested-prompts';
 import { FollowUpPrompts, parseFollowUpQuestions } from './follow-up-prompts';
@@ -38,6 +42,7 @@ import {
   partIsToolUI,
   stopChat,
 } from '../utils';
+import { AtlasConnectionStatus } from './atlas-connection-status';
 
 const { ChatWindow } = LgChatChatWindow;
 const { LeafyGreenChatProvider } = LgChatLeafygreenChatProvider;
@@ -57,6 +62,9 @@ export type SendMessageOptions = {
 // TODO(COMPASS-9751): These are temporary patches to make the Assistant chat take the entire
 // width and height of the drawer since Leafygreen doesn't support this yet.
 const assistantChatFixesStyles = css({
+  overflowY: 'clip',
+  display: 'flex',
+  flexDirection: 'column',
   // Compass has a global bullet point override but we clear this for the chat.
   ul: {
     listStyleType: 'disc',
@@ -229,6 +237,9 @@ const toolToggleContainerStyles = css({
 const DISMISSED_ASSISTANT_TOOLS_INTRO_LOCAL_STORAGE_KEY =
   'mongodb_compass_dismissedAssistantToolsIntro' as const;
 
+const ATLAS_CONNECTION_ERROR_DEBUGGER_TOOL_TYPE =
+  'tool-atlas-connection-error-debugger';
+
 export const AssistantChat: React.FunctionComponent<AssistantChatProps> = ({
   chat,
   hasNonGenuineConnections,
@@ -236,9 +247,9 @@ export const AssistantChat: React.FunctionComponent<AssistantChatProps> = ({
   const track = useTelemetry();
   const darkMode = useDarkMode();
   const isToolCallingEnabled = usePreference('enableToolCalling');
-  const enableSearchActivationProgramP2 = usePreference(
-    'enableSearchActivationProgramP2'
-  );
+  const { enableSearchActivationProgramP2 } = useSearchActivationProgramP2({
+    trackIsInSample: false,
+  });
   const enableGenAIToolCallingAtlasProject = usePreference(
     'enableGenAIToolCallingAtlasProject'
   );
@@ -253,6 +264,9 @@ export const AssistantChat: React.FunctionComponent<AssistantChatProps> = ({
     chat.messages[chat.messages.length - 1] ?? {};
 
   const { ensureOptInAndSend } = useContext(AssistantActionsContext);
+  const enableAtlasConnectionErrorDebugger = usePreference(
+    'enableAtlasConnectionErrorDebugger'
+  );
   const {
     messages,
     status,
@@ -579,6 +593,7 @@ export const AssistantChat: React.FunctionComponent<AssistantChatProps> = ({
       )}
       style={chatContainerOverrideStyle}
     >
+      {enableAtlasConnectionErrorDebugger && <AtlasConnectionStatus />}
       <LeafyGreenChatProvider>
         <ChatWindow>
           <div
@@ -667,6 +682,34 @@ export const AssistantChat: React.FunctionComponent<AssistantChatProps> = ({
                     {toolCalls.map((toolCall, index) => {
                       const toolCallId =
                         toolCall.toolCallId || `${id}-${toolCall.type}`;
+
+                      if (
+                        toolCall.type ===
+                        ATLAS_CONNECTION_ERROR_DEBUGGER_TOOL_TYPE
+                      ) {
+                        return (
+                          <AtlasToolCallMessage
+                            key={`${toolCallId}-${index}`}
+                            toolCall={toolCall}
+                            onApprove={(approvalId, approved) =>
+                              handleToolApproval({
+                                message,
+                                type: toolCall.type,
+                                approvalId,
+                                approved,
+                              })
+                            }
+                            onDeny={(approvalId) =>
+                              handleToolApproval({
+                                message,
+                                type: toolCall.type,
+                                approvalId,
+                                approved: false,
+                              })
+                            }
+                          />
+                        );
+                      }
 
                       return (
                         <ToolCallMessage

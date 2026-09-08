@@ -46,6 +46,8 @@ import {
   ReadOnlyPreferenceAccess,
 } from 'compass-preferences-model/provider';
 import { TelemetryProvider } from '@mongodb-js/compass-telemetry/provider';
+import { CompassExperimentationProvider } from '@mongodb-js/compass-telemetry';
+import type { ExperimentTestGroup } from '@mongodb-js/compass-telemetry';
 import { CompassComponentsProvider } from '@mongodb-js/compass-components';
 import {
   TestEnvCurrentConnectionContext,
@@ -72,6 +74,12 @@ import AppRegistry, {
 import { expect } from 'chai';
 import { Provider } from 'react-redux';
 import ConnectionString from 'mongodb-connection-string-url';
+import {
+  AtlasAuthServiceProvider,
+  AtlasServiceProvider,
+  type AtlasAuthService,
+} from '@mongodb-js/atlas-service/provider';
+import { AtlasAdminApiServiceProvider } from '@mongodb-js/atlas-admin-api/provider';
 
 import './assertions';
 
@@ -106,6 +114,16 @@ type TestConnectionsOptions = {
    * Connection storage mock
    */
   connectionStorage?: ConnectionStorage;
+  /**
+   * Simulates the entity being assigned to a given experiment variant (or
+   * `null` for not being in any variant, the default).
+   */
+  experimentAssignment?: ExperimentTestGroup | null;
+  /**
+   * Simulates the experiment assignment still being in flight. `false` by
+   * default.
+   */
+  experimentAssignmentLoading?: boolean;
 } & Partial<
   Omit<
     React.ComponentProps<typeof CompassConnections>,
@@ -304,9 +322,9 @@ function createWrapper(
     ) as PreferencesAccess,
     track: Sinon.stub(),
     logger: createNoopLogger(),
+    atlasAuthService: new EventEmitter() as unknown as AtlasAuthService,
     connectionStorage:
-      options.connectionStorage ??
-      (new InMemoryConnectionStorage(connections) as ConnectionStorage),
+      options.connectionStorage ?? new InMemoryConnectionStorage(connections),
     connectionsStore: {
       getState: undefined as unknown as () => State,
       actions: {} as ReturnType<typeof useConnectionActions>,
@@ -361,6 +379,43 @@ function createWrapper(
   const telemetryOptions = {
     sendTrack: wrapperState.track,
   };
+  const noopAsyncResult = {
+    asyncStatus: null,
+    error: null,
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+  } as const;
+  const experimentAssignment = options.experimentAssignment ?? null;
+  const experimentAssignmentLoading =
+    options.experimentAssignmentLoading ?? false;
+  const experimentationProviderProps = {
+    useAssignment: () =>
+      experimentAssignmentLoading
+        ? {
+            assignment: null,
+            ...noopAsyncResult,
+            asyncStatus: 'LOADING',
+            isLoading: true,
+            isSuccess: false,
+          }
+        : {
+            assignment: experimentAssignment
+              ? { assignmentData: { variant: experimentAssignment } }
+              : null,
+            ...noopAsyncResult,
+            asyncStatus: 'SUCCESS',
+          },
+    useTrackInSample: () => noopAsyncResult,
+    assignExperiment: () => Promise.resolve(null),
+    getAssignment: () =>
+      Promise.resolve(
+        experimentAssignment
+          ? { assignmentData: { variant: experimentAssignment } }
+          : null
+      ),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
   const _CompassComponentsProvider = skipUIWrappers
     ? EmptyWrapper
     : CompassComponentsProvider;
@@ -374,37 +429,50 @@ function createWrapper(
           <_CompassComponentsProvider popoverPortalContainer={container}>
             <PreferencesProvider value={wrapperState.preferences}>
               <LoggerProvider value={logger}>
-                <TelemetryProvider options={telemetryOptions}>
-                  <ConnectionStorageProvider
-                    value={wrapperState.connectionStorage}
-                  >
-                    <ConnectFnProvider connect={wrapperState.connect}>
-                      <CompassConnections
-                        appName={options.appName ?? 'TEST'}
-                        onExtraConnectionDataRequest={
-                          options.onExtraConnectionDataRequest ??
-                          (() => {
-                            return Promise.resolve([{}, null] as [any, null]);
-                          })
-                        }
-                        onAutoconnectInfoRequest={
-                          options.onAutoconnectInfoRequest
-                        }
-                        preloadStorageConnectionInfos={connections}
-                      >
-                        <StoreGetter>
-                          <TestEnvCurrentConnectionContext.Provider
-                            value={TEST_ENV_CURRENT_CONNECTION}
+                <AtlasAuthServiceProvider value={wrapperState.atlasAuthService}>
+                  <AtlasServiceProvider>
+                    <AtlasAdminApiServiceProvider>
+                      <TelemetryProvider options={telemetryOptions}>
+                        <CompassExperimentationProvider
+                          {...experimentationProviderProps}
+                        >
+                          <ConnectionStorageProvider
+                            value={wrapperState.connectionStorage}
                           >
-                            <TestingLibraryWrapper {...props}>
-                              {children}
-                            </TestingLibraryWrapper>
-                          </TestEnvCurrentConnectionContext.Provider>
-                        </StoreGetter>
-                      </CompassConnections>
-                    </ConnectFnProvider>
-                  </ConnectionStorageProvider>
-                </TelemetryProvider>
+                            <ConnectFnProvider connect={wrapperState.connect}>
+                              <CompassConnections
+                                appName={options.appName ?? 'TEST'}
+                                onExtraConnectionDataRequest={
+                                  options.onExtraConnectionDataRequest ??
+                                  (() => {
+                                    return Promise.resolve([{}, null] as [
+                                      any,
+                                      null
+                                    ]);
+                                  })
+                                }
+                                onAutoconnectInfoRequest={
+                                  options.onAutoconnectInfoRequest
+                                }
+                                preloadStorageConnectionInfos={connections}
+                              >
+                                <StoreGetter>
+                                  <TestEnvCurrentConnectionContext.Provider
+                                    value={TEST_ENV_CURRENT_CONNECTION}
+                                  >
+                                    <TestingLibraryWrapper {...props}>
+                                      {children}
+                                    </TestingLibraryWrapper>
+                                  </TestEnvCurrentConnectionContext.Provider>
+                                </StoreGetter>
+                              </CompassConnections>
+                            </ConnectFnProvider>
+                          </ConnectionStorageProvider>
+                        </CompassExperimentationProvider>
+                      </TelemetryProvider>
+                    </AtlasAdminApiServiceProvider>
+                  </AtlasServiceProvider>
+                </AtlasAuthServiceProvider>
               </LoggerProvider>
             </PreferencesProvider>
           </_CompassComponentsProvider>

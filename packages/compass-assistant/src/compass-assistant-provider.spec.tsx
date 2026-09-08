@@ -21,8 +21,9 @@ import {
   DrawerAnchor,
   DrawerContentProvider,
 } from '@mongodb-js/compass-components';
-import type { AtlasAuthService } from '@mongodb-js/atlas-service/provider';
-import type { AtlasService } from '@mongodb-js/atlas-service/provider';
+import { type AtlasService } from '@mongodb-js/atlas-service/provider';
+import { AtlasAuthPlugin } from '@mongodb-js/atlas-service/renderer';
+import type { AtlasAdminApiService } from '@mongodb-js/atlas-admin-api/provider';
 import { CompassAssistantDrawer } from './compass-assistant-drawer';
 import { createBrokenTransport, createMockChat } from '../test/utils';
 import {
@@ -30,7 +31,6 @@ import {
   type AtlasAiService,
   type ToolsController,
 } from '@mongodb-js/compass-generative-ai/provider';
-import type { TrackFunction } from '@mongodb-js/compass-telemetry';
 import { createNoopLogger } from '@mongodb-js/compass-logging/provider';
 import type { ActiveConnectionInfo } from './assistant-global-state';
 import {
@@ -84,12 +84,17 @@ function createMockProvider({
   }
 
   return CompassAssistantProvider.withMockServices({
-    atlasService: mockAtlasService as unknown as AtlasService,
-    atlasAiService: mockAtlasAiService as unknown as AtlasAiService,
-    atlasAuthService: mockAtlasAuthService as unknown as AtlasAuthService,
-    toolsController: mockToolsController as unknown as ToolsController,
+    atlasService: mockAtlasService,
+    atlasAiService: mockAtlasAiService,
+    atlasAuthService: mockAtlasAuthService,
+    toolsController: mockToolsController,
+    atlasAdminApi: {
+      getSystemStatus: sinon.stub().resolves({}),
+    } as unknown as AtlasAdminApiService,
   });
 }
+
+const AtlasLoginPlugin = AtlasAuthPlugin.withMockServices({});
 
 // Test component that renders CompassAssistantProvider (and AssistantProvider) with children
 const TestComponent: React.FunctionComponent<{
@@ -122,10 +127,10 @@ const TestComponent: React.FunctionComponent<{
   currentTab,
 }) => {
   const MockedProvider = createMockProvider({
-    mockAtlasService: mockAtlasService as unknown as AtlasService,
-    mockAtlasAiService: mockAtlasAiService as unknown as AtlasAiService,
-    mockAtlasAuthService: mockAtlasAuthService as unknown as AtlasAuthService,
-    mockToolsController: mockToolsController as unknown as ToolsController,
+    mockAtlasService: mockAtlasService,
+    mockAtlasAiService: mockAtlasAiService,
+    mockAtlasAuthService: mockAtlasAuthService,
+    mockToolsController: mockToolsController,
   });
 
   const FakeStateSetterComponent = () => {
@@ -155,11 +160,13 @@ const TestComponent: React.FunctionComponent<{
           >
             <DrawerAnchor>
               <div data-testid="provider-children">Provider children</div>
-              <CompassAssistantDrawer
-                appName="Compass"
-                autoOpen={autoOpen}
-                hasNonGenuineConnections={hasNonGenuineConnections}
-              />
+              <AtlasLoginPlugin>
+                <CompassAssistantDrawer
+                  appName="Compass"
+                  autoOpen={autoOpen}
+                  hasNonGenuineConnections={hasNonGenuineConnections}
+                />
+              </AtlasLoginPlugin>
             </DrawerAnchor>
             {/* Test code, doesn't matter */}
             {/* eslint-disable-next-line react-hooks/static-components */}
@@ -201,7 +208,6 @@ describe('useAssistantActions', function () {
         // These control isAIFeatureEnabled
         enableGenAIFeatures: false,
         enableGenAIFeaturesAtlasOrg: true,
-        cloudFeatureRolloutAccess: { GEN_AI_COMPASS: true },
         enableToolCalling: true,
       },
     });
@@ -216,22 +222,6 @@ describe('useAssistantActions', function () {
         enableAIAssistant: true,
         enableGenAIFeatures: true,
         enableGenAIFeaturesAtlasOrg: false,
-        cloudFeatureRolloutAccess: { GEN_AI_COMPASS: true },
-        enableToolCalling: true,
-      },
-    });
-
-    expect(result.current).to.have.keys(['getIsAssistantEnabled']);
-  });
-
-  it('returns mostly empty object when cloudFeatureRolloutAccess is disabled', function () {
-    const { result } = renderHook(() => useAssistantActions(), {
-      wrapper: createWrapper(createMockChat({ messages: [] })),
-      preferences: {
-        enableAIAssistant: true,
-        enableGenAIFeatures: true,
-        enableGenAIFeaturesAtlasOrg: true,
-        cloudFeatureRolloutAccess: { GEN_AI_COMPASS: false },
         enableToolCalling: true,
       },
     });
@@ -246,7 +236,6 @@ describe('useAssistantActions', function () {
         enableAIAssistant: true,
         enableGenAIFeatures: true,
         enableGenAIFeaturesAtlasOrg: true,
-        cloudFeatureRolloutAccess: { GEN_AI_COMPASS: true },
         enableToolCalling: true,
       },
     });
@@ -255,6 +244,9 @@ describe('useAssistantActions', function () {
     expect(result.current.interpretExplainPlan).to.be.a('function');
     expect(result.current.interpretConnectionError).to.be.a('function');
     expect(result.current.tellMoreAboutInsight).to.be.a('function');
+    expect(result.current.interpretAnalyzeOutput).to.be.a('function');
+    expect(result.current.debugSearchError).to.be.a('function');
+    expect(result.current.diagnoseSearchStage).to.be.a('function');
   });
 });
 
@@ -278,7 +270,6 @@ describe('CompassAssistantProvider', function () {
         enableAIAssistant: true,
         enableGenAIFeatures: true,
         enableGenAIFeaturesAtlasOrg: true,
-        cloudFeatureRolloutAccess: { GEN_AI_COMPASS: true },
         enableToolCalling: true,
       },
     });
@@ -294,7 +285,6 @@ describe('CompassAssistantProvider', function () {
           // These control isAIFeatureEnabled
           enableGenAIFeatures: false,
           enableGenAIFeaturesAtlasOrg: true,
-          cloudFeatureRolloutAccess: { GEN_AI_COMPASS: true },
           enableToolCalling: true,
         },
       });
@@ -310,29 +300,12 @@ describe('CompassAssistantProvider', function () {
           enableAIAssistant: true,
           enableGenAIFeatures: true,
           enableGenAIFeaturesAtlasOrg: false,
-          cloudFeatureRolloutAccess: { GEN_AI_COMPASS: true },
           enableToolCalling: true,
         },
       });
 
       expect(screen.getByTestId('provider-children')).to.exist;
       // The drawer toolbar button should not exist when Atlas org AI features are disabled
-      expect(screen.queryByLabelText('MongoDB Assistant')).to.not.exist;
-    });
-
-    it('does not render assistant drawer when cloud feature rollout access is disabled', function () {
-      render(<TestComponent chat={createMockChat({ messages: [] })} />, {
-        preferences: {
-          enableAIAssistant: true,
-          enableGenAIFeatures: true,
-          enableGenAIFeaturesAtlasOrg: true,
-          cloudFeatureRolloutAccess: { GEN_AI_COMPASS: false },
-          enableToolCalling: true,
-        },
-      });
-
-      expect(screen.getByTestId('provider-children')).to.exist;
-      // The drawer toolbar button should not exist when cloud feature rollout access is disabled
       expect(screen.queryByLabelText('MongoDB Assistant')).to.not.exist;
     });
   });
@@ -343,7 +316,6 @@ describe('CompassAssistantProvider', function () {
         enableAIAssistant: true,
         enableGenAIFeatures: true,
         enableGenAIFeaturesAtlasOrg: true,
-        cloudFeatureRolloutAccess: { GEN_AI_COMPASS: true },
         enableToolCalling: true,
       },
     });
@@ -412,7 +384,6 @@ describe('CompassAssistantProvider', function () {
             enableAIAssistant: true,
             enableGenAIFeatures: true,
             enableGenAIFeaturesAtlasOrg: true,
-            cloudFeatureRolloutAccess: { GEN_AI_COMPASS: true },
             enableToolCalling,
             enableGenAIToolCallingAtlasProject,
             enableGenAIToolCalling,
@@ -573,7 +544,7 @@ describe('CompassAssistantProvider', function () {
           parts: [
             {
               type: 'text',
-              text: "<instructions>\nDatabase tool calls require a focused connection. Tell the user to navigate to a connection if they try to use any of these tools:\n- find: Retrieves specific documents that match your search criteria.\n- aggregate: Performs complex data processing, grouping, and calculations.\n- count: Quickly returns the total number of documents matching a query.\n- list-databases: Displays all available databases in the connected cluster.\n- list-collections: Shows all collections within a specified database.\n- collection-schema: Describes the schema structure of a collection.\n- collection-indexes: Lists all indexes defined on a collection.\n- collection-storage-size: Returns the storage size information for a collection.\n- db-stats: Provides database statistics including size and usage.\n- explain: Provides execution statistics and query plan information.\n- mongodb-logs: Returns the most recent logged mongod events.\n- get-current-query: Get the current query from the querybar.\n- get-current-pipeline: Get the current pipeline from the aggregation builder.\n</instructions>\n\nThe user does not have any tabs open.\n\n<abilities>\nIF the user has a focused connection you CAN:\n1. Access user database information, such as collection schemas, etc.\n2. Query MongoDB directly.\n3. Access the user's current query or aggregation pipeline.\n</abilities>\n\n<instructions>\nYou SHOULD:\n1. Always offer to run a tool again if the user asks about data that requires it.\n2. When the 'collection-schema' tool is available (for example, once the user has a focused connection), use it to access collection schema information whenever asked to generate queries or aggregations and before performing queries or aggregations.\n</instructions>",
+              text: "<instructions>\nDatabase tool calls require a focused connection. Tell the user to navigate to a connection if they try to use any of these tools:\n- find: Retrieves specific documents that match your search criteria.\n- aggregate: Performs complex data processing, grouping, and calculations.\n- count: Quickly returns the total number of documents matching a query.\n- list-databases: Displays all available databases in the connected cluster.\n- list-collections: Shows all collections within a specified database.\n- collection-schema: Describes the schema structure of a collection.\n- collection-indexes: Lists all indexes defined on a collection.\n- collection-storage-size: Returns the storage size information for a collection.\n- db-stats: Provides database statistics including size and usage.\n- explain: Provides execution statistics and query plan information.\n- mongodb-logs: Returns the most recent logged mongod events.\n- get-current-query: Get the current query from the querybar.\n- get-current-pipeline: Get the current pipeline from the aggregation builder.\n- atlas-connection-error-debugger: Use to debug a Compass connection failure to an Atlas cluster. Returns Atlas-side diagnostics (cluster state, IP access list).\n</instructions>\n\nThe user does not have any tabs open.\n\n<abilities>\nIF the user has a focused connection you CAN:\n1. Access user database information, such as collection schemas, etc.\n2. Query MongoDB directly.\n3. Access the user's current query or aggregation pipeline.\n</abilities>\n\n<instructions>\nYou SHOULD:\n1. Always offer to run a tool again if the user asks about data that requires it.\n2. When the 'collection-schema' tool is available (for example, once the user has a focused connection), use it to access collection schema information whenever asked to generate queries or aggregations and before performing queries or aggregations.\n</instructions>",
             },
           ],
         },
@@ -708,7 +679,7 @@ describe('CompassAssistantProvider', function () {
 
       expect(mockToolsController.setContext.callCount).to.equal(1);
       expect(mockToolsController.setContext.firstCall.args[0]).to.deep.equal({
-        enableTelemetry: true,
+        enableMCPTelemetry: true,
         maxTimeMS: undefined,
         connections: [],
         query,
@@ -775,7 +746,7 @@ describe('CompassAssistantProvider', function () {
 
       expect(mockToolsController.setContext.callCount).to.equal(1);
       expect(mockToolsController.setContext.firstCall.args[0]).to.deep.equal({
-        enableTelemetry: true,
+        enableMCPTelemetry: true,
         maxTimeMS: undefined,
         connections: [],
         query,
@@ -850,7 +821,7 @@ describe('CompassAssistantProvider', function () {
 
       expect(mockToolsController.setContext.callCount).to.equal(1);
       expect(mockToolsController.setContext.firstCall.args[0]).to.deep.equal({
-        enableTelemetry: true,
+        enableMCPTelemetry: true,
         maxTimeMS: undefined,
         connections: [],
         query,
@@ -936,7 +907,7 @@ describe('CompassAssistantProvider', function () {
 
       expect(mockToolsController.setContext.callCount).to.equal(1);
       expect(mockToolsController.setContext.firstCall.args[0]).to.deep.equal({
-        enableTelemetry: true,
+        enableMCPTelemetry: true,
         maxTimeMS: undefined,
         connections: [
           {
@@ -995,7 +966,7 @@ describe('CompassAssistantProvider', function () {
 
       expect(mockToolsController.setContext.callCount).to.equal(1);
       expect(mockToolsController.setContext.firstCall.args[0]).to.deep.equal({
-        enableTelemetry: true,
+        enableMCPTelemetry: true,
         maxTimeMS: 5000,
         connections: [],
         query: undefined,
@@ -1018,7 +989,7 @@ describe('CompassAssistantProvider', function () {
               .returns('https://localhost:3000'),
           } as unknown as AtlasService,
           logger: createNoopLogger(),
-          track: track as unknown as TrackFunction,
+          track: track,
         });
         await renderOpenAssistantDrawer({
           chat,

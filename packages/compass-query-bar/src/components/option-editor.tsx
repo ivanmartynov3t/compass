@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import {
   css,
   cx,
@@ -16,6 +16,7 @@ import type {
 import {
   CodemirrorInlineEditor as InlineEditor,
   createQueryWithHistoryAutocompleter,
+  useSafeIntegerLinter,
 } from '@mongodb-js/compass-editor';
 import { connect } from '../stores/context';
 import { usePreference } from 'compass-preferences-model/provider';
@@ -37,6 +38,7 @@ import type {
   RecentQuery,
 } from '@mongodb-js/my-queries-storage';
 import type { QueryOptionOfTypeDocument } from '../constants/query-option-definition';
+import { useTelemetry } from '@mongodb-js/compass-telemetry/provider';
 
 type AutoCompleteQuery<T extends { _lastExecuted: Date }> = Partial<T> & {
   _lastExecuted: Date;
@@ -76,6 +78,53 @@ const editorWithErrorStyles = css({
   },
 });
 
+// For querybar we want tooltip to be more like LG popover
+const getDiagnosticActionTooltipTheme = (darkMode?: boolean) => ({
+  spec: {
+    '& .cm-tooltip.cm-tooltip-lint': {
+      borderRadius: `${spacing[300]}px`,
+      boxShadow: darkMode
+        ? `0 ${spacing[100]}px ${spacing[300]}px rgba(0, 0, 0, 0.5)`
+        : `0 ${spacing[100]}px ${spacing[300]}px rgba(0, 0, 0, 0.15)`,
+      overflow: 'hidden',
+    },
+    '& .cm-diagnostic': {
+      padding: `${spacing[200]}px ${spacing[300]}px`,
+      marginLeft: 0,
+      borderLeft: 'none',
+      display: 'flex',
+      gap: `${spacing[200]}px`,
+      alignItems: 'center',
+    },
+    '& .cm-diagnosticAction': {
+      padding: `0 ${spacing[150]}px`,
+      fontWeight: 500,
+      lineHeight: '20px',
+      color: darkMode ? palette.gray.light2 : palette.gray.dark2,
+      backgroundColor: darkMode ? palette.gray.dark2 : palette.white,
+      textDecoration: 'none',
+      border: `1px solid ${palette.gray.base}`,
+      borderRadius: `${spacing[150]}px`,
+      cursor: 'pointer',
+      transition: 'all 150ms ease-in-out',
+    },
+    '& .cm-diagnosticAction:hover': {
+      backgroundColor: darkMode ? palette.gray.dark1 : palette.gray.light2,
+      borderColor: darkMode ? palette.gray.base : palette.gray.dark1,
+      boxShadow: darkMode
+        ? `0 0 0 ${spacing[100]}px ${palette.gray.dark2}`
+        : `0 0 0 ${spacing[100]}px ${palette.gray.light2}`,
+    },
+    '& .cm-diagnosticAction:focus-visible': {
+      outline: 'none',
+      boxShadow: `0 0 0 ${spacing[100]}px ${
+        darkMode ? palette.blue.light1 : palette.blue.base
+      }`,
+    },
+  },
+  options: { dark: darkMode },
+});
+
 type OptionEditorProps = {
   optionName: QueryOptionOfTypeDocument;
   namespace: string;
@@ -87,6 +136,7 @@ type OptionEditorProps = {
    */
   insertEmptyDocOnFocus?: boolean;
   onChange: (value: string) => void;
+  onUnsafeInteger: () => void;
   onApply?(): void;
   onBlur?(): void;
   placeholder?: string | (() => HTMLElement);
@@ -116,6 +166,7 @@ export const OptionEditor: React.FunctionComponent<OptionEditorProps> = ({
   recentQueries,
   favoriteQueries,
   onApplyQuery,
+  onUnsafeInteger,
 }) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<EditorRef>(null);
@@ -197,6 +248,26 @@ export const OptionEditor: React.FunctionComponent<OptionEditorProps> = ({
     darkMode,
     optionName,
   ]);
+  const track = useTelemetry();
+  const linterAnnotationTheme = useMemo(
+    () => getDiagnosticActionTooltipTheme(darkMode),
+    [darkMode]
+  );
+  const { safeIntegerLinter, violations: safeIntegerViolations } =
+    useSafeIntegerLinter({
+      theme: linterAnnotationTheme,
+      onFixViolation: (source) => `Long("${source}")`,
+      onViolationFixed() {
+        track('Safe Integer Fix Applied', {
+          source: 'query-bar-editor',
+        });
+      },
+    });
+  useEffect(() => {
+    if (safeIntegerViolations.length > 0) {
+      onUnsafeInteger();
+    }
+  }, [safeIntegerViolations, onUnsafeInteger]);
 
   const onFocus = () => {
     if (insertEmptyDocOnFocus) {
@@ -249,9 +320,11 @@ export const OptionEditor: React.FunctionComponent<OptionEditorProps> = ({
         ref={editorRef}
         id={id}
         text={value}
+        showAnnotationsGutter={optionName === 'filter'}
         onChangeText={onChange}
         placeholder={placeholder}
         completer={completer}
+        linter={safeIntegerLinter}
         commands={commands}
         data-testid={dataTestId}
         disabled={disabled}

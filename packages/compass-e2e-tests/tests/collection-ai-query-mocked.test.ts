@@ -13,14 +13,27 @@ import * as Selectors from '../helpers/selectors.ts';
 import { createNumbersCollection } from '../helpers/mongo-clients.ts';
 import { startMockAssistantServer } from '../helpers/assistant-service.ts';
 
+// Whether the generate query input was left open is persisted, make sure every
+// test starts with it closed.
+const AI_INPUT_VISIBLE_STORAGE_KEYS = [
+  'compass_query_bar_ai_input_visible',
+  'compass_aggregations_ai_input_visible',
+];
+
 async function setup(
   browser: CompassBrowser,
   dbName: string,
   collName: string
 ) {
   await createNumbersCollection(collName);
-  await browser.setupDefaultConnections();
+  await browser.disconnectAll();
   await browser.connectToDefaults();
+  await browser.execute((keys: string[]) => {
+    for (const key of keys) {
+      // eslint-disable-next-line no-restricted-globals
+      localStorage.removeItem(key);
+    }
+  }, AI_INPUT_VISIBLE_STORAGE_KEYS);
   await browser.navigateToCollectionTab(
     getDefaultConnectionNames(0),
     dbName,
@@ -32,9 +45,6 @@ async function setup(
   await browser.setFeature('enableGenAISampleDocumentPassing', true);
   await browser.setFeature('enableGenAIFeaturesAtlasOrg', true);
   await browser.setFeature('optInGenAIFeatures', true);
-  await browser.setFeature('cloudFeatureRolloutAccess', {
-    GEN_AI_COMPASS: true,
-  });
 }
 
 describe('Collection ai query (with mocked backend)', function () {
@@ -49,6 +59,7 @@ describe('Collection ai query (with mocked backend)', function () {
     mockAssistantServer = await startMockAssistantServer();
     compass = await init(this.test?.fullTitle());
     browser = compass.browser;
+    await browser.setupDefaultConnections();
 
     await browser.setEnv(
       'COMPASS_ASSISTANT_BASE_URL_OVERRIDE',

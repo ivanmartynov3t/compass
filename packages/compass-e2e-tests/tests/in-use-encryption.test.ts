@@ -350,6 +350,19 @@ describe('CSFLE / QE', function () {
       });
 
       beforeEach(async function () {
+        // These query types were renamed from their "*Preview" names to their
+        // GA names in server 9.0; older servers only accept the preview names.
+        const useGAStringQueryTypes = serverSatisfies('>=9.0.0-alpha0', true);
+        const prefixQueryType = useGAStringQueryTypes
+          ? 'prefix'
+          : 'prefixPreview';
+        const suffixQueryType = useGAStringQueryTypes
+          ? 'suffix'
+          : 'suffixPreview';
+        const substringQueryType = useGAStringQueryTypes
+          ? 'substring'
+          : 'substringPreview';
+
         await browser.disconnectAll();
         await browser.connectWithConnectionForm({
           hosts: [CONNECTION_HOSTS],
@@ -406,7 +419,7 @@ describe('CSFLE / QE', function () {
                   bsonType: 'string',
                   queries: [
                     {
-                      queryType: 'prefixPreview',
+                      queryType: '${prefixQueryType}',
                       contention: 0,
                       strMinQueryLength: 3,
                       strMaxQueryLength: 30,
@@ -425,7 +438,7 @@ describe('CSFLE / QE', function () {
                   bsonType: 'string',
                   queries: [
                     {
-                      queryType: 'suffixPreview',
+                      queryType: '${suffixQueryType}',
                       contention: 0,
                       strMinQueryLength: 3,
                       strMaxQueryLength: 30,
@@ -444,7 +457,7 @@ describe('CSFLE / QE', function () {
                   bsonType: 'string',
                   queries: [
                     {
-                      queryType: 'substringPreview',
+                      queryType: '${substringQueryType}',
                       contention: 0,
                       strMinQueryLength: 3,
                       strMaxQueryLength: 10,
@@ -565,7 +578,7 @@ describe('CSFLE / QE', function () {
 
         // set the text in the editor
         await browser.setCodemirrorEditorValue(
-          Selectors.InsertJSONEditor,
+          Selectors.InsertDocumentEditor,
           '{ "phoneNumber": "30303030", "name": "Person X" }'
         );
 
@@ -650,21 +663,16 @@ describe('CSFLE / QE', function () {
             return this.skip();
           }
 
-          if (
-            ['prefixPreview', 'suffixPreview', 'substringPreview'].includes(
-              mode
-            ) &&
-            serverSatisfies('>=9.0.0-alpha0', true)
-          ) {
-            // TODO(COMPASS-10665): prefixPreview, suffixPreview and substringPreview are renamed in 9.0.0
-            return this.skip();
-          }
-
           const [field, oldValue, newValue] = fieldOldNewByMode(mode);
           const oldValueJS = eval(oldValue);
           const newValueJS = eval(newValue);
-          const toString = (v: any) =>
-            v?.toISOString?.()?.replace(/Z$/, '+00:00') ?? JSON.stringify(v);
+          const toString = (v: any, isInsert: boolean) => {
+            if (v instanceof Date) {
+              const date = v.toISOString().replace(/Z$/, '+00:00');
+              return isInsert ? date : `ISODate('${date}')`;
+            }
+            return JSON.stringify(v);
+          };
 
           await browser.shellEval(connectionName, [
             `use ${databaseName}`,
@@ -683,7 +691,7 @@ describe('CSFLE / QE', function () {
           );
 
           const result = await browser.getFirstListDocument();
-          expect(result[field]).to.be.equal(toString(oldValueJS));
+          expect(result[field]).to.be.equal(toString(oldValueJS, false));
 
           const document = browser.$(Selectors.DocumentListEntry);
           const value = document.$(
@@ -696,7 +704,9 @@ describe('CSFLE / QE', function () {
           );
           await browser.setValueVisible(
             input,
-            typeof newValueJS === 'string' ? newValueJS : toString(newValueJS)
+            typeof newValueJS === 'string'
+              ? newValueJS
+              : toString(newValueJS, true)
           );
 
           const footer = document.$(Selectors.DocumentFooterMessage);
@@ -728,7 +738,9 @@ describe('CSFLE / QE', function () {
           await browser.runFindOperation('Documents', filter);
 
           const modifiedResult = await browser.getFirstListDocument();
-          expect(modifiedResult[field]).to.be.equal(toString(newValueJS));
+          expect(modifiedResult[field]).to.be.equal(
+            toString(newValueJS, false)
+          );
           expect(modifiedResult._id).to.be.equal(result._id);
         });
       }
@@ -921,7 +933,7 @@ describe('CSFLE / QE', function () {
 
         // set the text in the editor
         await browser.setCodemirrorEditorValue(
-          Selectors.InsertJSONEditor,
+          Selectors.InsertDocumentEditor,
           '{ "phoneNumber": "30303030", "faxNumber": "30303030", "name": "Third" }'
         );
 

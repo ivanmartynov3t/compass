@@ -1,5 +1,4 @@
 import { throwIfAborted } from '@mongodb-js/compass-utils';
-import type { AtlasAuthService } from './atlas-auth-service';
 import type { AtlasServiceConfig } from './util';
 import {
   getAtlasConfig,
@@ -53,19 +52,16 @@ function getAutomationAgentClusterId(
 }
 
 export class AtlasService {
-  private readonly authService: AtlasAuthService;
   private readonly preferences: PreferencesAccess;
   private readonly logger: Logger;
   private readonly options?: AtlasServiceOptions;
   private readonly defaultConfigOverride?: AtlasServiceConfig;
   constructor(
-    authService: AtlasAuthService,
     preferences: PreferencesAccess,
     logger: Logger,
     options?: AtlasServiceOptions,
     defaultConfigOverride?: AtlasServiceConfig
   ) {
-    this.authService = authService;
     this.preferences = preferences;
     this.logger = logger;
     this.options = options;
@@ -76,11 +72,14 @@ export class AtlasService {
   get config(): AtlasServiceConfig {
     return this.defaultConfigOverride ?? getAtlasConfig(this.preferences);
   }
-  adminApiEndpoint(path?: string): string {
-    return `${this.config.atlasApiBaseUrl}${normalizePath(path)}`;
+  privateApiEndpoint(path?: string): string {
+    return `${this.config.atlasPrivateApiBaseUrl}${normalizePath(path)}`;
   }
   cloudEndpoint(path?: string): string {
     return `${this.config.cloudBaseUrl}${normalizePath(path)}`;
+  }
+  adminApiEndpoint(path?: string): string {
+    return `${this.config.atlasAdminApiBaseUrl}${normalizePath(path)}`;
   }
   assistantApiEndpoint(path?: string): string {
     return `${this.config.assistantApiBaseUrl}${normalizePath(path)}`;
@@ -162,12 +161,11 @@ export class AtlasService {
     url: RequestInfo | URL,
     init?: RequestInit
   ): Promise<Response> {
-    const authHeaders = await this.authService.getAuthHeaders();
     return this.fetch(url, {
       ...init,
       headers: {
         ...init?.headers,
-        ...authHeaders,
+        ['X-Compass-Auth']: 'true',
       },
       credentials: 'include',
     });

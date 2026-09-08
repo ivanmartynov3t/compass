@@ -5,9 +5,7 @@ ignores: [
     '@mongosh/node-runtime-worker-thread',
     # native addons
     'kerberos',
-    'keytar',
     'os-dns-native',
-    'native-machine-id',
     'system-ca',
     'win-export-certificate-and-key',
     'macos-export-certificate-and-key',

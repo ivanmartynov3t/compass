@@ -5,9 +5,9 @@ import { createLogger } from '@mongodb-js/compass-logging';
 import type { CompassApplication } from './application';
 import type { EventEmitter } from 'events';
 import { getOsInfo } from '@mongodb-js/get-os-info';
-import type { IdentifyTraits } from '@mongodb-js/compass-telemetry';
+import type { IdentifyEvent } from '@mongodb-js/compass-telemetry';
 import { getDeviceId } from '@mongodb-js/device-id';
-import { getMachineId } from 'native-machine-id';
+import { getMachineId } from '@mongodb-js/native-machine-id';
 
 const { log, mongoLogId } = createLogger('COMPASS-TELEMETRY');
 
@@ -52,7 +52,7 @@ class CompassTelemetry {
 
   private static initPromise: Promise<void> | null = null;
 
-  private static _getCommonProperties() {
+  private static _getCommonEventProperties() {
     // Used in both track and identify to add common traits
     // to any event that we send to segment
     return {
@@ -66,7 +66,7 @@ class CompassTelemetry {
 
   // Keep this method synchronous to avoid race conditions.
   private static _track(info: EventInfo) {
-    const commonProperties = this._getCommonProperties();
+    const commonProperties = this._getCommonEventProperties();
 
     if (!this.telemetryAnonymousId) {
       this.queuedEvents.push(info);
@@ -88,7 +88,10 @@ class CompassTelemetry {
       userId: this.telemetryAtlasUserId,
       anonymousId: this.telemetryAnonymousId,
       event: info.event,
-      properties: { ...info.properties, ...commonProperties },
+      properties: {
+        ...info.properties,
+        ...commonProperties,
+      },
     });
   }
 
@@ -112,8 +115,8 @@ class CompassTelemetry {
       this.analytics &&
       this.telemetryAnonymousId
     ) {
-      const traits: IdentifyTraits = {
-        ...this._getCommonProperties(),
+      const traits: IdentifyEvent['payload'] = {
+        ...this._getCommonEventProperties(),
         platform: process.platform,
         arch: process.arch,
         ...this.osInfo,
@@ -216,6 +219,12 @@ class CompassTelemetry {
         this.state = 'disabled';
       }
     };
+
+    /**
+     * The atlasUserId is set when user sign in to Atlas, and is only updated after another sign in.
+     * We deliberately do not clear the atlasUserId when user sign out, so that we can still attribute events
+     * to the same user even after they sign out.
+     */
     const onAtlasUserIdChanged = (value?: string) => {
       if (value) {
         this.telemetryAtlasUserId = value;

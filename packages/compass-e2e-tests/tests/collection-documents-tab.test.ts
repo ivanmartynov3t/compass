@@ -1,5 +1,6 @@
 import chai from 'chai';
 import clipboard from 'clipboardy';
+import { EJSON } from 'bson';
 import type { CompassBrowser } from '../helpers/compass-browser.ts';
 import {
   deleteCommonVariedProperties,
@@ -15,6 +16,7 @@ import {
 import type { Compass } from '../helpers/compass.ts';
 import * as Selectors from '../helpers/selectors.ts';
 import {
+  allTypesDoc,
   createNestedDocumentsCollection,
   createNumbersCollection,
 } from '../helpers/mongo-clients.ts';
@@ -115,6 +117,26 @@ async function getFormattedDocument(browser: CompassBrowser) {
     .replace(/\n/g, ' ')
     .replace(/\s+?:/g, ':')
     .replace(/\s+/g, ' ');
+}
+
+async function addItemFromField(
+  browser: CompassBrowser,
+  field: string,
+  childTypeSelector: string
+) {
+  const addFieldMenuButton = browser.$(
+    Selectors.hadronDocumentAddFieldButton(field)
+  );
+
+  await browser.hover(Selectors.hadronDocumentFieldRow(field));
+  await addFieldMenuButton.waitForDisplayed();
+  await addFieldMenuButton.click();
+
+  const addChildButton = browser.$(childTypeSelector);
+  await addChildButton.waitForDisplayed();
+  await addChildButton.click();
+  const footer = browser.$(Selectors.DocumentFooterMessage);
+  expect(await footer.getText()).to.equal('Document modified.');
 }
 
 describe('Collection documents tab', function () {
@@ -391,10 +413,6 @@ describe('Collection documents tab', function () {
   });
 
   it('can export to language', async function () {
-    if (isTestingWebAtlasCloud()) {
-      return this.skip();
-    }
-
     await navigateToTab(browser, 'Documents'); // just in case the previous test failed before it could clean up
 
     await browser.runFindOperation('Documents', '{ i: 5 }');
@@ -409,7 +427,17 @@ describe('Collection documents tab', function () {
       useBuilders: true,
     });
 
-    expect(text).to.equal(`import static com.mongodb.client.model.Filters.eq;
+    // In logged in Atlas tests the connection string changes each run.
+    const onAtlasCloud = isTestingWebAtlasCloud();
+    const connectionString = onAtlasCloud
+      ? '<connectionString>'
+      : 'mongodb://127.0.0.1:27091/test';
+    const normalizedText = onAtlasCloud
+      ? text.replace(/"mongodb(?:\+srv)?:\/\/[^"]*"/, `"${connectionString}"`)
+      : text;
+
+    expect(normalizedText).to
+      .equal(`import static com.mongodb.client.model.Filters.eq;
 import com.mongodb.MongoClient;
 import com.mongodb.MongoClientURI;
 import com.mongodb.client.MongoCollection;
@@ -425,7 +453,7 @@ import com.mongodb.client.FindIterable;
 Bson filter = eq("i", 5L);
 MongoClient mongoClient = new MongoClient(
     new MongoClientURI(
-        "mongodb://127.0.0.1:27091/test"
+        "${connectionString}"
     )
 );
 MongoDatabase database = mongoClient.getDatabase("test");
@@ -569,6 +597,72 @@ FindIterable<Document> result = collection.find(filter);`);
     );
   });
 
+  it('shows error for unsafe integer values and action to fix them in json view', async function () {
+    await browser.runFindOperation('Documents', '{ i: 123 }');
+    await browser.clickVisible(Selectors.SelectJSONView);
+
+    const document = browser.$(Selectors.DocumentJSONEntry);
+    await document.waitForDisplayed();
+
+    await waitForJSON(browser, document);
+
+    const json = await browser.getCodemirrorEditorText(
+      Selectors.DocumentJSONEntry
+    );
+    expect(json.replace(/\s+/g, ' ')).to.match(
+      /^\{ "_id": \{ "\$oid": "[a-f0-9]{24}" \}, "i": 123, "j": 0 \}$/
+    );
+
+    await browser.hover(Selectors.JSONDocumentCard);
+    await browser.clickVisible(Selectors.JSONEditDocumentButton);
+
+    const newjson = JSON.stringify({
+      ...JSON.parse(json),
+      j: Number.MAX_SAFE_INTEGER + 1,
+    });
+
+    await browser.setCodemirrorEditorValue(
+      Selectors.DocumentJSONEntry,
+      newjson
+    );
+
+    const footer = document.$(Selectors.DocumentFooterMessage);
+    await browser.waitUntil(async () => {
+      return (await footer.getText()).includes(
+        'Number exceeds the safe integer range.'
+      );
+    });
+
+    await document.$(Selectors.DocumentFooterFixSafeIntegerLink).click();
+
+    const updatedJson = await browser.getCodemirrorEditorText(
+      Selectors.DocumentJSONEntry
+    );
+    expect(updatedJson.replace(/\s+/g, ' ')).to.contain(
+      `"j":{"$numberLong": "${Number.MAX_SAFE_INTEGER + 1}"}`
+    );
+
+    const button = document.$(Selectors.UpdateDocumentButton);
+    await button.click();
+    await footer.waitForDisplayed({ reverse: true });
+
+    await browser.runFindOperation('Documents', '{ i: 123 }');
+    await browser.clickVisible(Selectors.SelectJSONView);
+
+    const modifiedDocument = browser.$(Selectors.DocumentJSONEntry);
+    await modifiedDocument.waitForDisplayed();
+
+    await waitForJSON(browser, modifiedDocument);
+
+    expect(
+      (
+        await browser.getCodemirrorEditorText(Selectors.DocumentJSONEntry)
+      ).replace(/\s+/g, ' ')
+    ).to.match(
+      /^\{ "_id": \{ "\$oid": "[a-f0-9]{24}" \}, "i": 123, "j": { "\$numberLong": "[0-9]{16}" } \}$/
+    );
+  });
+
   it('supports view/edit via table view', async function () {
     await browser.runFindOperation('Documents', '{ i: 33 }');
     await browser.clickVisible(Selectors.SelectTableView);
@@ -610,20 +704,54 @@ FindIterable<Document> result = collection.find(filter);`);
 
     await browser.runFindOperation('Documents', '{ i: 34 }');
 
-    const document = browser.$(Selectors.DocumentListEntry);
-    await document.waitForDisplayed();
+    async function navigateToDocumentView(
+      view: 'list' | 'json',
+      onNavigate: () => Promise<void>
+    ) {
+      const tabSelector =
+        view === 'list' ? Selectors.SelectListView : Selectors.SelectJSONView;
+      const documentSelector =
+        view === 'list'
+          ? Selectors.DocumentListEntry
+          : Selectors.DocumentJSONEntry;
+      const copyButtonSelector =
+        view === 'list'
+          ? Selectors.CopyDocumentButton
+          : Selectors.JSONCopyDocumentButton;
+      await browser.clickVisible(tabSelector);
+      const document = browser.$(documentSelector);
+      await document.waitForDisplayed();
+      await browser.hover(documentSelector);
+      await browser.clickVisible(copyButtonSelector);
+      await onNavigate();
+      // Hide the tooltip that appears when copying a document
+      // by clicking on the document again.
+      await browser.clickVisible(documentSelector);
+    }
 
-    await browser.hover(Selectors.DocumentListEntry);
-    await browser.clickVisible(Selectors.CopyDocumentButton);
+    // Currently in list view, we copy in shell-syntax
+    // and in json view, we copy in ejson format.
+    await navigateToDocumentView('list', async () => {
+      await browser.waitUntil(
+        async () => {
+          return !!/^\{ _id: ObjectId\('[a-f0-9]{24}'\), i: NumberInt\('34'\), j: NumberInt\('0'\) \}$/.exec(
+            (await clipboard.read()).replace(/\s+/g, ' ').replace(/\n/g, '')
+          );
+        },
+        { timeoutMsg: 'Expected copy to clipboard to work in list view' }
+      );
+    });
 
-    await browser.waitUntil(
-      async () => {
-        return !!/^\{ "_id": \{ "\$oid": "[a-f0-9]{24}" \}, "i": 34, "j": 0 \}$/.exec(
-          (await clipboard.read()).replace(/\s+/g, ' ').replace(/\n/g, '')
-        );
-      },
-      { timeoutMsg: 'Expected copy to clipboard to work' }
-    );
+    await navigateToDocumentView('json', async () => {
+      await browser.waitUntil(
+        async () => {
+          return !!/^\{ "_id": \{ "\$oid": "[a-f0-9]{24}" \}, "i": 34, "j": 0 \}$/.exec(
+            (await clipboard.read()).replace(/\s+/g, ' ').replace(/\n/g, '')
+          );
+        },
+        { timeoutMsg: 'Expected copy to clipboard to work in json view' }
+      );
+    });
   });
 
   it('can clone and delete a document from the contextual toolbar', async function () {
@@ -640,7 +768,7 @@ FindIterable<Document> result = collection.find(filter);`);
 
     // set the text in the editor and insert the document
     await browser.setCodemirrorEditorValue(
-      Selectors.InsertJSONEditor,
+      Selectors.InsertDocumentEditor,
       '{ "i": 10042 }'
     );
     const insertConfirm = browser.$(Selectors.InsertConfirm);
@@ -947,6 +1075,392 @@ FindIterable<Document> result = collection.find(filter);`);
           reverse: true,
         });
       });
+    });
+  });
+
+  context('supports editing document in list view', function () {
+    beforeEach(async function () {
+      await browser.navigateToCollectionTab(
+        getDefaultConnectionNames(0),
+        'test',
+        'nestedDocs',
+        'Documents'
+      );
+      await browser.runFindOperation(
+        'Documents',
+        '{ "names.firstName": "1-firstName" }'
+      );
+      const document = browser.$(Selectors.DocumentListEntry);
+      await document.waitForDisplayed();
+
+      await browser.hover(Selectors.DocumentListEntry);
+      await browser.clickVisible(Selectors.EditDocumentButton);
+    });
+
+    it('adds an item within an array', async function () {
+      await addItemFromField(
+        browser,
+        'addresses',
+        Selectors.HadronDocumentAddChildButton
+      );
+
+      // Addresses is a string array with 2 items
+      const newValueInput = browser.$(
+        `${Selectors.hadronDocumentFieldRow('2')} ${
+          Selectors.HadronDocumentValueEditor
+        }`
+      );
+      await newValueInput.waitForDisplayed();
+      await browser.setValueVisible(newValueInput, 'berlin');
+
+      const footer = browser.$(Selectors.DocumentFooterMessage);
+      const button = browser.$(Selectors.UpdateDocumentButton);
+      await button.click();
+      await footer.waitForDisplayed({ reverse: true });
+
+      await browser.runFindOperation(
+        'Documents',
+        '{ "names.firstName": "1-firstName" }'
+      );
+
+      const expandButton = browser.$(
+        Selectors.hadronDocumentExpandRowButton('addresses')
+      );
+      await expandButton.waitForDisplayed();
+      await browser.clickVisible(expandButton);
+      await browser.$(Selectors.hadronDocumentFieldRow('2')).waitForDisplayed();
+    });
+
+    it('adds a field after an array', async function () {
+      await addItemFromField(
+        browser,
+        'addresses',
+        Selectors.HadronDocumentAddSibling
+      );
+
+      const newFieldInput = browser.$(
+        `${Selectors.hadronDocumentFieldRow('')} ${
+          Selectors.HadronDocumentKeyEditor
+        }`
+      );
+      await newFieldInput.waitForDisplayed();
+      await browser.setValueVisible(newFieldInput, 'newFieldAfterArray');
+
+      const newValueInput = browser.$(
+        `${Selectors.hadronDocumentFieldRow('newFieldAfterArray')} ${
+          Selectors.HadronDocumentValueEditor
+        }`
+      );
+      await newValueInput.waitForDisplayed();
+      await browser.setValueVisible(newValueInput, 'newValue');
+
+      const footer = browser.$(Selectors.DocumentFooterMessage);
+      const button = browser.$(Selectors.UpdateDocumentButton);
+      await button.click();
+      await footer.waitForDisplayed({ reverse: true });
+
+      await browser.runFindOperation(
+        'Documents',
+        '{ "names.firstName": "1-firstName" }'
+      );
+
+      await browser
+        .$(Selectors.hadronDocumentFieldRow('newFieldAfterArray'))
+        .waitForDisplayed();
+    });
+
+    it('adds a field in an object', async function () {
+      await addItemFromField(
+        browser,
+        'names',
+        Selectors.HadronDocumentAddChildButton
+      );
+
+      const newFieldInput = browser.$(
+        `${Selectors.hadronDocumentFieldRow('')} ${
+          Selectors.HadronDocumentKeyEditor
+        }`
+      );
+      await newFieldInput.waitForDisplayed();
+      await browser.setValueVisible(newFieldInput, 'newField');
+
+      const newValueInput = browser.$(
+        `${Selectors.hadronDocumentFieldRow('newField')} ${
+          Selectors.HadronDocumentValueEditor
+        }`
+      );
+      await newValueInput.waitForDisplayed();
+      await browser.setValueVisible(newValueInput, 'newValue');
+
+      const footer = browser.$(Selectors.DocumentFooterMessage);
+      const button = browser.$(Selectors.UpdateDocumentButton);
+      await button.click();
+      await footer.waitForDisplayed({ reverse: true });
+
+      await browser.runFindOperation(
+        'Documents',
+        '{ "names.firstName": "1-firstName" }'
+      );
+
+      const expandButton = browser.$(
+        Selectors.hadronDocumentExpandRowButton('names')
+      );
+      await expandButton.waitForDisplayed();
+      await browser.clickVisible(expandButton);
+      await browser
+        .$(Selectors.hadronDocumentFieldRow('newField'))
+        .waitForDisplayed();
+    });
+
+    it('adds a field after an object', async function () {
+      await addItemFromField(
+        browser,
+        'names',
+        Selectors.HadronDocumentAddSibling
+      );
+
+      const newFieldInput = browser.$(
+        `${Selectors.hadronDocumentFieldRow('')} ${
+          Selectors.HadronDocumentKeyEditor
+        }`
+      );
+      await newFieldInput.waitForDisplayed();
+      await browser.setValueVisible(newFieldInput, 'newFieldFromObject');
+
+      const newValueInput = browser.$(
+        `${Selectors.hadronDocumentFieldRow('newFieldFromObject')} ${
+          Selectors.HadronDocumentValueEditor
+        }`
+      );
+      await newValueInput.waitForDisplayed();
+      await browser.setValueVisible(newValueInput, 'newValue');
+
+      const footer = browser.$(Selectors.DocumentFooterMessage);
+      const button = browser.$(Selectors.UpdateDocumentButton);
+      await button.click();
+      await footer.waitForDisplayed({ reverse: true });
+
+      await browser.runFindOperation(
+        'Documents',
+        '{ "names.firstName": "1-firstName" }'
+      );
+
+      await browser
+        .$(Selectors.hadronDocumentFieldRow('newFieldFromObject'))
+        .waitForDisplayed();
+    });
+  });
+
+  it('handles unsafe integer values when inserting a document in json view', async function () {
+    await browser.navigateToCollectionTab(
+      getDefaultConnectionNames(0),
+      'test',
+      'numbers',
+      'Documents'
+    );
+
+    // browse to the "Insert to Collection" modal
+    await browser.clickVisible(Selectors.AddDataButton);
+    const insertDocumentOption = browser.$(Selectors.InsertDocumentOption);
+    await insertDocumentOption.waitForDisplayed();
+    await browser.clickVisible(Selectors.InsertDocumentOption);
+    await browser.waitForOpenModal(Selectors.InsertDialog);
+
+    await browser.clickVisible(Selectors.InsertDialogJSONView);
+    await browser.setCodemirrorEditorValue(
+      Selectors.InsertDocumentEditor,
+      `{ "i": ${Number.MAX_SAFE_INTEGER + 1} }`
+    );
+
+    const banner = browser.$(Selectors.InsertDialogErrorMessage);
+    await banner.waitForDisplayed();
+
+    await browser.waitUntil(async () => {
+      return (await banner.getText()).includes(
+        'Number exceeds the safe integer range.'
+      );
+    });
+
+    // Fix the error
+    const errorDetailsBtn = browser.$(Selectors.InsertDialogErrorDetailsBtn);
+    await banner.waitForDisplayed();
+    await errorDetailsBtn.click();
+
+    // Banner should be gone now
+    await banner.waitForDisplayed({ reverse: true });
+
+    const updatedJson = await browser.getCodemirrorEditorText(
+      Selectors.InsertDocumentEditor
+    );
+    expect(updatedJson.replace(/\s+/g, ' ')).to.include(
+      `"i": {"$numberLong": "${Number.MAX_SAFE_INTEGER + 1}"}`
+    );
+
+    const insertConfirm = browser.$(Selectors.InsertConfirm);
+    await insertConfirm.waitForEnabled();
+    await browser.clickVisible(Selectors.InsertConfirm);
+    await browser.waitForOpenModal(Selectors.InsertDialog, { reverse: true });
+
+    await browser.runFindOperation(
+      'Documents',
+      `{ "i": Int64("${Number.MAX_SAFE_INTEGER + 1}") }`
+    );
+    const document = browser.$(Selectors.DocumentListEntry);
+    await document.waitForDisplayed();
+  });
+
+  it('inserts a document using shell syntax', async function () {
+    // Browse to the "Insert to Collection" modal.
+    await browser.clickVisible(Selectors.AddDataButton);
+    await browser.clickVisible(Selectors.InsertDocumentOption);
+    await browser.waitForOpenModal(Selectors.InsertDialog);
+
+    await browser.clickVisible(Selectors.InsertDialogShellView);
+
+    // First we show an invalid entry, and look for the error.
+    await browser.setCodemirrorEditorValue(
+      Selectors.InsertDocumentEditor,
+      '{ i: ObjectId( }'
+    );
+    const errorBanner = browser.$(Selectors.InsertDialogErrorMessage);
+    await errorBanner.waitForDisplayed();
+
+    // Now we enter a valid document.
+    await browser.setCodemirrorEditorValue(
+      Selectors.InsertDocumentEditor,
+      `{
+        i: 10142,
+        _id: ObjectId(),
+        long: NumberLong('9223372036854775807'),
+        decimal: NumberDecimal('123.45'),
+        date: ISODate('2023-01-01T00:00:00.000Z'),
+        regex: /foo.*bar/i,
+        ts: Timestamp(1234, 5),
+        uuid: UUID('79a4a7c6-1c1f-4d5e-9f8a-1b2c3d4e5f60'),
+        min: MinKey(),
+        nested: { a: 1, b: { c: 2 } },
+        arr: [1, 2, 3]
+      }`
+    );
+
+    // No validation error for valid shell syntax.
+    const banner = browser.$(Selectors.InsertDialogErrorMessage);
+    await banner.waitForDisplayed({ reverse: true });
+
+    const insertConfirm = browser.$(Selectors.InsertConfirm);
+    await insertConfirm.waitForEnabled();
+    await browser.clickVisible(Selectors.InsertConfirm);
+    await browser.waitForOpenModal(Selectors.InsertDialog, { reverse: true });
+
+    await browser.runFindOperation('Documents', '{ i: 10142 }');
+    const doc = await getFormattedDocument(browser);
+    expect(doc).to.match(/^_id: ObjectId\('[a-f0-9]{24}'\)/);
+    expect(doc).to.include('i: 10142');
+    expect(doc).to.include("long: Long('9223372036854775807')");
+    expect(doc).to.include("decimal: Decimal128('123.45')");
+    expect(doc).to.include("date: ISODate('2023-01-01T00:00:00.000+00:00')");
+    expect(doc).to.include('regex: /foo.*bar/i');
+    expect(doc).to.include('ts: Timestamp({ t: 1234, i: 5 })');
+    expect(doc).to.include(
+      "uuid: UUID('79a4a7c6-1c1f-4d5e-9f8a-1b2c3d4e5f60')"
+    );
+    expect(doc).to.include('min: MinKey()');
+    expect(doc).to.include('nested: Object (2)');
+    expect(doc).to.include('arr: Array (3)');
+  });
+
+  it('converts Extended JSON to shell syntax, keeping the BSON types', async function () {
+    // Browse to the "Insert to Collection" modal.
+    await browser.clickVisible(Selectors.AddDataButton);
+    await browser.clickVisible(Selectors.InsertDocumentOption);
+    await browser.waitForOpenModal(Selectors.InsertDialog);
+
+    await browser.clickVisible(Selectors.InsertDialogShellView);
+
+    await browser.setCodemirrorEditorValue(
+      Selectors.InsertDocumentEditor,
+      EJSON.stringify(allTypesDoc, { relaxed: false }, 2)
+    );
+
+    const conversionBanner = browser.$(
+      Selectors.InsertDialogEJSONConversionBanner
+    );
+    await conversionBanner.waitForDisplayed();
+    expect(await conversionBanner.getText()).to.include('$numberDouble');
+
+    await browser.clickVisible(Selectors.InsertDialogEJSONConversionBtn);
+    await conversionBanner.waitForDisplayed({ reverse: true });
+
+    // The full type-by-type mapping is covered by the compass-crud unit tests
+    // for convertEJSONToShellSyntax, here we only check that the editor picked
+    // the conversion up.
+    const converted = (
+      await browser.getCodemirrorEditorText(Selectors.InsertDocumentEditor)
+    ).replace(/\s+/g, ' ');
+    expect(converted).to.include(
+      `objectId: ObjectId('642d766c7300158b1f22e975')`
+    );
+    expect(converted).to.include(`'long': NumberLong('123456789123456789')`);
+    expect(converted).to.not.include('$numberLong');
+
+    const insertConfirm = browser.$(Selectors.InsertConfirm);
+    await insertConfirm.waitForEnabled();
+    await browser.clickVisible(Selectors.InsertConfirm);
+    await browser.waitForOpenModal(Selectors.InsertDialog, { reverse: true });
+
+    // Converting in relaxed mode would have rounded this to the nearest
+    // double, so the document would not be found by its exact value.
+    await browser.runFindOperation(
+      'Documents',
+      `{ long: Long('123456789123456789') }`
+    );
+    expect(
+      await browser.$(Selectors.DocumentListActionBarMessage).getText()
+    ).to.equal('1 – 1 of 1');
+  });
+
+  it('handles unsafe integer values when querying a document', async function () {
+    await browser.navigateToCollectionTab(
+      getDefaultConnectionNames(0),
+      'test',
+      'numbers',
+      'Documents'
+    );
+
+    await browser.runFindOperation(
+      'Documents',
+      `{ "i": ${Number.MAX_SAFE_INTEGER + 1} }`
+    );
+
+    await browser.waitUntil(async () => {
+      return browser.$(Selectors.CodemirrorLintErrorIcon).isDisplayed();
+    });
+
+    // query.filter field is invalid and run button should be disabled
+    const runButton = browser.$(
+      Selectors.queryBarApplyFilterButton('Documents')
+    );
+    await browser.waitUntil(async () => {
+      return (await runButton.getAttribute('aria-disabled')) === 'true';
+    });
+
+    await browser.hover(Selectors.CodemirrorLintErrorIcon);
+
+    await browser.waitUntil(async () => {
+      return browser.$(Selectors.CodemirrorLintTooltip).isDisplayed();
+    });
+
+    await browser.clickVisible(Selectors.CodemirrorLintAction);
+
+    const query = await browser.getCodemirrorEditorText(
+      Selectors.queryBarOptionInputFilter('Documents')
+    );
+    expect(query.replace(/\s+/g, ' ')).to.include(
+      `"i": Long("${Number.MAX_SAFE_INTEGER + 1}")`
+    );
+
+    await browser.waitUntil(async () => {
+      return (await runButton.getAttribute('aria-disabled')) === 'false';
     });
   });
 });

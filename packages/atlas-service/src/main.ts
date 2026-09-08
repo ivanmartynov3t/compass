@@ -1,14 +1,18 @@
 import { shell, app } from 'electron';
+import type Electron from 'electron';
 import { URL, URLSearchParams } from 'url';
 import type {
   AuthFlowType,
+  MongoDBOIDCError,
   MongoDBOIDCPlugin,
   MongoDBOIDCPluginOptions,
 } from '@mongodb-js/oidc-plugin';
 import {
   throwIfNotOk,
   throwIfNetworkTrafficDisabled,
+  throwIfAtlasSignInDisabled,
   getTrackingUserInfo,
+  getJWTTokenPayload,
 } from './util';
 import {
   createMongoDBOIDCPlugin,
@@ -16,7 +20,7 @@ import {
 } from '@mongodb-js/oidc-plugin';
 import { oidcServerRequestHandler } from '@mongodb-js/devtools-connect';
 import type { Agent } from 'https';
-import type { IntrospectInfo, AtlasUserInfo, AtlasServiceConfig } from './util';
+import type { AtlasUserInfo, AtlasServiceConfig } from './util';
 import { throwIfAborted } from '@mongodb-js/compass-utils';
 import type { HadronIpcMain } from 'hadron-ipc';
 import { ipcMain } from 'hadron-ipc';
@@ -28,9 +32,12 @@ import { spawn } from 'child_process';
 import { getAtlasConfig } from './util';
 import { createIpcTrack } from '@mongodb-js/compass-telemetry';
 import type { RequestInit, Response } from '@mongodb-js/devtools-proxy-support';
+import { ATLAS_ADMIN_API_AUTH_ENDPOINTS } from './atlas-admin-api-auth-endpoints';
 
 const { log } = createLogger('COMPASS-ATLAS-SERVICE');
 const track = createIpcTrack();
+
+const REDIRECT_URI = 'http://127.0.0.1:0/compass/oauth/callback';
 
 const redirectRequestHandler = oidcServerRequestHandler.bind(null, {
   productName: 'Compass',
@@ -64,11 +71,12 @@ export class CompassAuthService {
 
   private static signInPromise: Promise<AtlasUserInfo> | null = null;
 
+  private static getUserAgent = () => `${app.getName()}/${app.getVersion()}`;
+
   private static fetch = async (
     url: string,
     init: RequestInit = {}
   ): Promise<Response> => {
-    await this.initPromise;
     this.throwIfNetworkTrafficDisabled();
     throwIfAborted(init.signal ?? undefined);
     log.info(
@@ -82,7 +90,7 @@ export class CompassAuthService {
         ...init,
         headers: {
           ...init.headers,
-          'User-Agent': `${app.getName()}/${app.getVersion()}`,
+          'User-Agent': this.getUserAgent(),
         },
       });
       await throwIfNotOk(res);
@@ -138,26 +146,18 @@ export class CompassAuthService {
 
   private static setupPlugin(serializedState?: string) {
     this.plugin = this.createMongoDBOIDCPlugin({
-      redirectServerRequestHandler: (data) => {
-        if (data.result === 'redirecting') {
-          const { res, status, location } = data;
-          res.statusCode = status;
-          const redirectUrl = new URL(this.config.authPortalUrl);
-          redirectUrl.searchParams.set('fromURI', location);
-          res.setHeader('Location', redirectUrl.toString());
-          res.end();
-          return;
-        }
-
-        redirectRequestHandler(data);
-      },
+      skipNonceInAuthCodeRequest: true,
+      defaultScopes: ['offline_access'],
+      discoveryAlgorithm: 'oauth2',
+      redirectURI: REDIRECT_URI,
+      redirectServerRequestHandler: redirectRequestHandler,
       openBrowser: async ({ url }) => {
         await this.openExternal(url);
       },
       allowedFlows: this.getAllowedAuthFlows.bind(this),
       logger: this.oidcPluginLogger,
       serializedState,
-      customFetch: this.httpClient
+      customFetch: this
         .fetch as unknown as MongoDBOIDCPluginOptions['customFetch'],
     });
     oidcPluginHookLoggerToMongoLogWriter(
@@ -178,11 +178,9 @@ export class CompassAuthService {
       if (this.ipcMain) {
         this.ipcMain.createHandle('AtlasService', this, [
           'getUserInfo',
-          'introspect',
           'isAuthenticated',
           'signIn',
           'signOut',
-          'maybeGetToken',
         ]);
       }
       this.attachOidcPluginLoggerEvents();
@@ -194,6 +192,11 @@ export class CompassAuthService {
       );
       const serializedState = await this.secretStore.getState();
       this.setupPlugin(serializedState);
+      if (
+        serializedState &&
+        this.preferences.getPreferences().enableAtlasSignIn
+      )
+        await this.restoreCurrentUser();
     })());
   }
 
@@ -201,9 +204,16 @@ export class CompassAuthService {
     throwIfNetworkTrafficDisabled(this.preferences);
   }
 
+  private static throwIfAtlasSignInDisabled() {
+    throwIfAtlasSignInDisabled(this.preferences);
+  }
+
   private static requestOAuthToken({ signal }: { signal?: AbortSignal } = {}) {
     throwIfAborted(signal);
     this.throwIfNetworkTrafficDisabled();
+    // Even if we still have a usable token stored, we should not to use it
+    // when Atlas sign in is disabled for the organization
+    this.throwIfAtlasSignInDisabled();
 
     if (!this.plugin) {
       throw new Error(
@@ -241,14 +251,51 @@ export class CompassAuthService {
     });
   }
 
+  /**
+   * Compass cannot use the introspect endpoint as it's a protected resource and Compass is an unauthenticated client.
+   * This method returns the last known state, which might be corrected if the next token refresh fails.
+   */
   static async isAuthenticated({
     signal,
   }: { signal?: AbortSignal } = {}): Promise<boolean> {
     throwIfAborted(signal);
-    try {
-      return (await this.introspect({ signal })).active;
-    } catch {
+    if (!this.preferences.getPreferences().enableAtlasSignIn) {
       return false;
+    }
+    await this.initPromise;
+    return !!this.currentUser;
+  }
+
+  static async restoreCurrentUser(): Promise<void> {
+    try {
+      const accessToken = await this.maybeGetToken({
+        tokenType: 'accessToken',
+        _skipWaitingForInit: true,
+      });
+      if (!accessToken) {
+        this.currentUser = null;
+        log.info(
+          mongoLogId(1_001_000_437),
+          'AtlasService',
+          'Did not restore sign in state',
+          { reason: 'No usable access token' }
+        );
+        return;
+      }
+      this.currentUser = this.getUserInfoFromAccessToken(accessToken);
+      log.info(
+        mongoLogId(1_001_000_438),
+        'AtlasService',
+        'Restored sign in state from stored token'
+      );
+    } catch {
+      this.currentUser = null;
+      log.info(
+        mongoLogId(1_001_000_439),
+        'AtlasService',
+        'Did not restore sign in state',
+        { reason: 'Failed to parse access token' }
+      );
     }
   }
 
@@ -262,29 +309,36 @@ export class CompassAuthService {
       this.signInPromise = (async () => {
         throwIfAborted(signal);
         this.throwIfNetworkTrafficDisabled();
+        this.throwIfAtlasSignInDisabled();
 
         log.info(mongoLogId(1_001_000_218), 'AtlasService', 'Starting sign in');
 
+        const startedAt = Date.now();
+
         try {
-          // We first request oauth token just so we can get a proper auth error
-          // from oidc-plugin. If we only run getUserInfo, the only thing users
-          // will see is "401 unauthorized" as the reason for sign in failure
-          await this.requestOAuthToken({ signal });
-          const userInfo = await this.getUserInfo({ signal });
+          const tokens = await this.requestOAuthToken({ signal });
+          this.currentUser = this.getUserInfoFromAccessToken(
+            tokens.accessToken
+          );
           log.info(
             mongoLogId(1_001_000_219),
             'AtlasService',
             'Signed in successfully'
           );
-          const { auid } = getTrackingUserInfo(userInfo);
-          track('Atlas Sign In Success', { auid });
+          const { auid } = getTrackingUserInfo(this.currentUser);
           await this.preferences.savePreferences({
             telemetryAtlasUserId: auid,
           });
-          return userInfo;
+          track('Atlas Sign In Success', {
+            auid,
+            duration: Date.now() - startedAt,
+          });
+          return this.currentUser;
         } catch (err) {
+          const error = err as Error & Partial<MongoDBOIDCError>;
           track('Atlas Sign In Error', {
-            error: (err as Error).message,
+            error: error.message,
+            error_code: error.codeName ?? error.name,
           });
           log.error(
             mongoLogId(1_001_000_220),
@@ -305,36 +359,36 @@ export class CompassAuthService {
     if (!this.currentUser) {
       throw new Error("Can't sign out if not signed in yet");
     }
-    // Reset and recreate event emitter first so that we don't accidentally
-    // react on any old plugin instance events
-    this.oidcPluginLogger.removeAllListeners();
-    this.oidcPluginLogger = new OidcPluginLogger();
-    this.attachOidcPluginLoggerEvents();
-    // Destroy old plugin and setup new one
-    await this.plugin?.destroy();
-    this.setupPlugin();
-    // Revoke tokens. Revoking refresh token will also revoke associated access
-    // tokens
-    // https://developer.okta.com/docs/guides/revoke-tokens/main/#revoke-an-access-token-or-a-refresh-token
     try {
       await this.revoke({ tokenType: 'refreshToken' });
     } catch (err) {
       if (!(err as any).statusCode) {
         throw err;
       }
+      log.error(
+        mongoLogId(1_001_000_393),
+        'AtlasService',
+        'Failed to revoke refresh token',
+        { error: (err as Error).stack }
+      );
       // Not much we can do if revoking failed with a network error, practically
       // this is not a failed state for the app, we already cleaned up token
       // from everywhere, so we just ignore this
     }
+    // Reset and recreate event emitter so that we don't accidentally react on
+    // any old plugin instance events
+    this.oidcPluginLogger.removeAllListeners();
+    this.oidcPluginLogger = new OidcPluginLogger();
+    this.attachOidcPluginLoggerEvents();
+    // Destroy old plugin and setup new one
+    await this.plugin?.destroy();
+    this.setupPlugin();
     // Keep a copy of current user info for tracking
     const userInfo = this.currentUser;
     // Reset service state
     this.currentUser = null;
     this.oidcPluginLogger.emit('atlas-service-signed-out');
-    // Open Atlas sign out page to end the browser session created for sign in
-    const signOutUrl = new URL(this.config.authPortalUrl);
-    signOutUrl.searchParams.set('signedOut', 'true');
-    void this.openExternal(signOutUrl.toString());
+
     track('Atlas Sign Out', getTrackingUserInfo(userInfo));
   }
 
@@ -344,11 +398,18 @@ export class CompassAuthService {
   static async maybeGetToken({
     tokenType,
     signal,
+    _skipWaitingForInit = false,
   }: {
     tokenType?: 'accessToken' | 'refreshToken';
     signal?: AbortSignal;
+    /**
+     * @internal Only for use by `restoreCurrentUser`, which runs inside the
+     * `initPromise` executor and would deadlock awaiting it.
+     */
+    _skipWaitingForInit?: boolean;
   }): Promise<string | undefined> {
     try {
+      if (!_skipWaitingForInit) await this.initPromise;
       tokenType ??= 'accessToken';
       const token = await this.requestOAuthToken({ signal });
       return token[tokenType];
@@ -358,65 +419,28 @@ export class CompassAuthService {
   }
 
   static async getUserInfo({
-    signal,
+    signal: _signal,
   }: { signal?: AbortSignal } = {}): Promise<AtlasUserInfo> {
-    throwIfAborted(signal);
-    this.throwIfNetworkTrafficDisabled();
-
-    this.currentUser ??= await (async () => {
-      const token = await this.maybeGetToken({ signal });
-
-      const res = await this.fetch(
-        `${this.config.atlasLogin.issuer}/v1/userinfo`,
-        {
-          headers: {
-            Authorization: `Bearer ${token ?? ''}`,
-            Accept: 'application/json',
-          },
-          signal: signal,
-        }
-      );
-
-      await throwIfNotOk(res);
-
-      return (await res.json()) as AtlasUserInfo;
-    })();
-    return this.currentUser;
+    // For now, the server is oauth only, so the user info is just a static sub from the access token.
+    // Keeping this method for future when we might have more user info available
+    if (!this.currentUser) {
+      throw new Error('User info is not available, user is not signed in');
+    }
+    return Promise.resolve(this.currentUser);
   }
 
-  static async introspect({
-    signal,
-    tokenType,
-  }: {
-    signal?: AbortSignal;
-    tokenType?: 'accessToken' | 'refreshToken';
-  } = {}) {
-    throwIfAborted(signal);
-    this.throwIfNetworkTrafficDisabled();
-
-    const url = new URL(`${this.config.atlasLogin.issuer}/v1/introspect`);
-    url.searchParams.set('client_id', this.config.atlasLogin.clientId);
-
-    tokenType ??= 'accessToken';
-
-    const token = await this.maybeGetToken({ signal, tokenType });
-
-    const res = await this.fetch(url.toString(), {
-      method: 'POST',
-      body: new URLSearchParams([
-        ['token', token ?? ''],
-        ['token_type_hint', TOKEN_TYPE_TO_HINT[tokenType]],
-      ]),
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      signal: signal,
-    });
-
-    await throwIfNotOk(res);
-
-    return res.json() as Promise<IntrospectInfo>;
+  private static getUserInfoFromAccessToken(
+    accessToken: string
+  ): AtlasUserInfo {
+    try {
+      const { sub } = getJWTTokenPayload(accessToken);
+      if (typeof sub !== 'string') {
+        throw new Error('Invalid sub claim in access token');
+      }
+      return { sub };
+    } catch (err) {
+      throw new Error('Failed to parse access token', err as Error);
+    }
   }
 
   static async revoke({
@@ -426,21 +450,20 @@ export class CompassAuthService {
     signal?: AbortSignal;
     tokenType?: 'accessToken' | 'refreshToken';
   } = {}): Promise<void> {
-    throwIfAborted(signal);
     this.throwIfNetworkTrafficDisabled();
-
-    const url = new URL(`${this.config.atlasLogin.issuer}/v1/revoke`);
-    url.searchParams.set('client_id', this.config.atlasLogin.clientId);
+    // TODO(COMPASS-7094): use the discovery endpoint instead of hardcoding this
+    const url = new URL(`${this.config.atlasLogin.issuer}/tokens/revoke`);
 
     tokenType ??= 'accessToken';
 
     const token = await this.maybeGetToken({ signal, tokenType });
 
-    const res = await this.fetch(url.toString(), {
+    await this.fetch(url.toString(), {
       method: 'POST',
       body: new URLSearchParams([
         ['token', token ?? ''],
         ['token_type_hint', TOKEN_TYPE_TO_HINT[tokenType]],
+        ['client_id', this.config.atlasLogin.clientId],
       ]),
       headers: {
         Accept: 'application/json',
@@ -449,7 +472,11 @@ export class CompassAuthService {
       signal: signal,
     });
 
-    await throwIfNotOk(res);
+    log.info(
+      mongoLogId(1_001_000_394),
+      'AtlasService',
+      'Signed out successfully'
+    );
   }
 
   static async onExit() {
@@ -464,8 +491,55 @@ export class CompassAuthService {
         mongoLogId(1_001_000_221),
         'AtlasService',
         'Failed to save auth state',
-        { erroe: (err as Error).stack }
+        { error: (err as Error).stack }
       );
     }
+  }
+
+  static isAuthenticatedAtlasAdminApiRequest({
+    url,
+  }: {
+    url: string;
+  }): boolean {
+    const parsedUrl = new URL(url);
+    return (
+      parsedUrl.origin === new URL(this.config.atlasAdminApiBaseUrl).origin &&
+      ATLAS_ADMIN_API_AUTH_ENDPOINTS.some((endpoint) => {
+        if (typeof endpoint === 'string') {
+          return parsedUrl.pathname === endpoint;
+        }
+        return endpoint.test(parsedUrl.pathname);
+      })
+    );
+  }
+
+  static async handleAuthHeaders({
+    requestHeaders,
+    url,
+  }: Pick<
+    Electron.OnBeforeSendHeadersListenerDetails,
+    'requestHeaders' | 'url'
+  >): Promise<Electron.OnBeforeSendHeadersListenerDetails['requestHeaders']> {
+    if (requestHeaders['X-Compass-Auth'] !== 'true') {
+      return requestHeaders;
+    }
+
+    if (!this.isAuthenticatedAtlasAdminApiRequest({ url }))
+      throw new Error('Invalid authenticated request URL.');
+
+    const newHeaders = { ...requestHeaders };
+    const token = await this.maybeGetToken({
+      tokenType: 'accessToken',
+    });
+    if (token) {
+      newHeaders.Authorization = `Bearer ${token}`;
+    }
+
+    delete newHeaders['X-Compass-Auth'];
+    log.info(mongoLogId(1_001_000_248), 'AtlasService', 'Added auth headers', {
+      url,
+    });
+
+    return newHeaders;
   }
 }

@@ -1,89 +1,94 @@
 /**
- * Traits sent along with the Segment identify call
+ * The Segment identify call
+ *
+ * @category Identify
  */
-export type IdentifyTraits = {
-  /**
-   * Shortened version number (e.g., '1.29').
-   */
-  compass_version: string;
+export type IdentifyEvent = {
+  name: 'Identify';
+  payload: {
+    /**
+     * Shortened version number (e.g., '1.29').
+     */
+    compass_version: string;
 
-  /**
-   * The full version of the Compass application, including additional identifiers
-   * such as build metadata or pre-release tags (e.g., '1.29.0-beta.1').
-   */
-  compass_full_version: string;
+    /**
+     * The full version of the Compass application, including additional identifiers
+     * such as build metadata or pre-release tags (e.g., '1.29.0-beta.1').
+     */
+    compass_full_version: string;
 
-  /**
-   * The distribution of Compass being used.
-   */
-  compass_distribution: 'compass' | 'compass-readonly' | 'compass-isolated';
+    /**
+     * The distribution of Compass being used.
+     */
+    compass_distribution: 'compass' | 'compass-readonly' | 'compass-isolated';
 
-  /**
-   * The release channel of Compass.
-   * - 'stable' for the general release.
-   * - 'beta' for pre-release versions intended for testing.
-   * - 'dev' for development versions only distributed internally.
-   */
-  compass_channel: 'stable' | 'beta' | 'dev';
+    /**
+     * The release channel of Compass.
+     * - 'stable' for the general release.
+     * - 'beta' for pre-release versions intended for testing.
+     * - 'dev' for development versions only distributed internally.
+     */
+    compass_channel: 'stable' | 'beta' | 'dev';
 
-  /**
-   * The platform on which Compass is running, derived from Node.js `os.platform()`.
-   * Corresponds to the operating system (e.g., 'darwin' for macOS, 'win32' for Windows, 'linux' for Linux).
-   */
-  platform: string;
+    /**
+     * The platform on which Compass is running, derived from Node.js `os.platform()`.
+     * Corresponds to the operating system (e.g., 'darwin' for macOS, 'win32' for Windows, 'linux' for Linux).
+     */
+    platform: string;
 
-  /**
-   * The architecture of the system's processor, derived from Node.js `os.arch()`.
-   * 'x64' for 64-bit processors and 'arm' for ARM processors.
-   */
-  arch: string;
+    /**
+     * The architecture of the system's processor, derived from Node.js `os.arch()`.
+     * 'x64' for 64-bit processors and 'arm' for ARM processors.
+     */
+    arch: string;
 
-  /**
-   * The type of operating system, including specific operating system
-   * names or types (e.g., 'Linux', 'Windows_NT', 'Darwin').
-   */
-  os_type?: string;
+    /**
+     * The type of operating system, including specific operating system
+     * names or types (e.g., 'Linux', 'Windows_NT', 'Darwin').
+     */
+    os_type?: string;
 
-  /**
-   * Detailed kernel or system version information.
-   * Example: 'Darwin Kernel Version 21.4.0: Fri Mar 18 00:45:05 PDT 2022; root:xnu-8020.101.4~15/RELEASE_X86_64'.
-   */
-  os_version?: string;
+    /**
+     * Detailed kernel or system version information.
+     * Example: 'Darwin Kernel Version 21.4.0: Fri Mar 18 00:45:05 PDT 2022; root:xnu-8020.101.4~15/RELEASE_X86_64'.
+     */
+    os_version?: string;
 
-  /**
-   * The architecture of the operating system, if available, which might be more specific
-   * than the system's processor architecture (e.g., 'x86_64' for 64-bit architecture).
-   */
-  os_arch?: string;
+    /**
+     * The architecture of the operating system, if available, which might be more specific
+     * than the system's processor architecture (e.g., 'x86_64' for 64-bit architecture).
+     */
+    os_arch?: string;
 
-  /**
-   * The release identifier of the operating system.
-   * This can provide additional details about the operating system release or
-   * version (e.g. the kernel version for a specific macOS release).
-   *
-   * NOTE: This property helps determine the macOS version in use. The reported
-   * version corresponds to the Darwin kernel version, which can be mapped
-   * to the respective macOS release using the conversion table available at:
-   * https://en.wikipedia.org/wiki/MacOS_version_history.
-   */
-  os_release?: string;
+    /**
+     * The release identifier of the operating system.
+     * This can provide additional details about the operating system release or
+     * version (e.g. the kernel version for a specific macOS release).
+     *
+     * NOTE: This property helps determine the macOS version in use. The reported
+     * version corresponds to the Darwin kernel version, which can be mapped
+     * to the respective macOS release using the conversion table available at:
+     * https://en.wikipedia.org/wiki/MacOS_version_history.
+     */
+    os_release?: string;
 
-  /**
-   * The Linux distribution name, if running on a Linux-based operating system,
-   * derived by reading from `/etc/os-release`.
-   * Examples include 'ubuntu', 'debian', or 'rhel'.
-   */
-  os_linux_dist?: string;
+    /**
+     * The Linux distribution name, if running on a Linux-based operating system,
+     * derived by reading from `/etc/os-release`.
+     * Examples include 'ubuntu', 'debian', or 'rhel'.
+     */
+    os_linux_dist?: string;
 
-  /**
-   * The version of the Linux distribution, if running on a Linux-based operating system,
-   * derived by reading from `/etc/os-release`.
-   * Examples include '20.04' for Ubuntu or '10' for Debian.
-   */
-  os_linux_release?: string;
+    /**
+     * The version of the Linux distribution, if running on a Linux-based operating system,
+     * derived by reading from `/etc/os-release`.
+     * Examples include '20.04' for Ubuntu or '10' for Debian.
+     */
+    os_linux_release?: string;
+  };
 };
 
-export type CommonProperties = {
+export type CommonEventProperties = {
   is_compass_web?: true;
 };
 
@@ -91,7 +96,7 @@ export type CommonProperties = {
  * All events in compass
  */
 type CommonEvent<E extends { payload: unknown }> = E & {
-  payload: E['payload'] & CommonProperties;
+  payload: E['payload'] & CommonEventProperties;
 };
 
 export type ConnectionScopedProperties = {
@@ -105,8 +110,79 @@ export type ConnectionScopedProperties = {
  * Events that are connection scoped are associated with one connection.
  */
 type ConnectionScopedEvent<E extends { payload: unknown }> = E & {
-  payload: E['payload'] & CommonProperties & ConnectionScopedProperties;
+  payload: E['payload'] & CommonEventProperties & ConnectionScopedProperties;
 };
+
+/**
+ * The surface of the application that triggered an Atlas sign in attempt. Used
+ * to tell what the main drivers of Atlas sign in are.
+ */
+export type AtlasSignInEntrypoint =
+  /**
+   * The sign in was triggered by an assistant tool call requiring Atlas, where
+   * the suffix is the name of the tool, e.g.
+   * `assistant-tool-atlas-connection-error-debugger`.
+   */
+  | `assistant-tool-${string}`
+  /**
+   * The sign in was triggered by a caller that doesn't provide an entrypoint.
+   */
+  | 'unknown';
+
+/**
+ * This event is fired when the user is shown a prompt inviting them to sign in
+ * to their Atlas account, before they decide whether to go ahead with it.
+ * Paired with `Atlas Sign In Started` it tells us how often each entrypoint
+ * converts.
+ *
+ * @category Atlas
+ */
+type AtlasSignInPromptShownEvent = CommonEvent<{
+  name: 'Atlas Sign In Prompt Shown';
+  payload: {
+    /**
+     * The surface of the application the prompt was shown in.
+     */
+    entrypoint: AtlasSignInEntrypoint;
+  };
+}>;
+
+/**
+ * This event is fired when a sign in attempt to an Atlas account is started,
+ * before the user is taken through the sign in flow.
+ *
+ * @category Atlas
+ */
+type AtlasSignInStartedEvent = CommonEvent<{
+  name: 'Atlas Sign In Started';
+  payload: {
+    /**
+     * The surface of the application the sign in was triggered from.
+     */
+    entrypoint: AtlasSignInEntrypoint;
+    /**
+     * The current attempt of the sign in. If the attempt is bigger than 1,
+     * it means the user is re-trying to sign in after a previous attempt
+     * did not succeed.
+     */
+    attempt: number;
+    /**
+     * How the immediately preceding attempt ended, when this is a retry.
+     * Null on the first attempt.
+     */
+    previousOutcome: 'timed-out' | 'canceled' | 'error' | null;
+  };
+}>;
+
+/**
+ * This event is fired when the user aborts the current sign in attempt.
+ *
+ * @category Atlas
+ */
+type AtlasSignInCanceledEvent = CommonEvent<{
+  name: 'Atlas Sign In Canceled';
+  payload: Record<string, never>;
+}>;
 
 /**
  * This event is fired when user successfully signed in to their Atlas account
@@ -120,6 +196,11 @@ type AtlasSignInSuccessEvent = CommonEvent<{
      * The id of the atlas user who signed in.
      */
     auid: string;
+    /**
+     * The time elapsed between the start of the sign in flow and its
+     * completion, in milliseconds.
+     */
+    duration: number;
   };
 }>;
 
@@ -135,6 +216,28 @@ type AtlasSignInErrorEvent = CommonEvent<{
      * The error message reported on sign in.
      */
     error: string;
+    /**
+     * The code identifying the error reported on sign in. The `codeName` of the
+     * oidc-plugin error when the failure comes from the sign in flow itself,
+     * the error name otherwise.
+     */
+    error_code: string;
+  };
+}>;
+
+/**
+ * This event is fired when the user does not complete the sign in to their Atlas
+ * account on time.
+ *
+ * @category Atlas
+ */
+type AtlasSignInTimedOutEvent = CommonEvent<{
+  name: 'Atlas Sign In Timed Out';
+  payload: {
+    /**
+     * The surface of the application the sign in was triggered from.
+     */
+    entrypoint: AtlasSignInEntrypoint;
   };
 }>;
 
@@ -895,6 +998,10 @@ type DocumentCopiedEvent = ConnectionScopedEvent<{
      * The view used to copy the document.
      */
     mode: 'list' | 'json' | 'table';
+    /**
+     * The format used to copy the document.
+     */
+    format: 'ejson' | 'shell-syntax';
   };
 }>;
 
@@ -922,7 +1029,7 @@ type DocumentUpdatedEvent = ConnectionScopedEvent<{
   name: 'Document Updated';
   payload: {
     /**
-     * The view used to delete the document.
+     * The view used to update the document.
      */
     mode: 'list' | 'json' | 'table';
   };
@@ -938,6 +1045,63 @@ type DocumentClonedEvent = ConnectionScopedEvent<{
   payload: {
     /**
      * The view used to clone the document.
+     */
+    mode: 'list' | 'json' | 'table';
+  };
+}>;
+
+/**
+ * This event is fired when user adds a field to a document, either at the
+ * top level or nested inside an array/document.
+ *
+ * @category Documents
+ */
+type DocumentFieldAddedEvent = ConnectionScopedEvent<{
+  name: 'Document Field Added';
+  payload: {
+    /**
+     * Whether the field was added to the top level of the document or
+     * inside an array or document.
+     */
+    added_to: 'top_level' | 'array' | 'document';
+
+    /**
+     * The view in which the field was added.
+     */
+    mode: 'list' | 'table' | 'insert';
+  };
+}>;
+
+/**
+ * This event is fired when user removes a field from a document.
+ *
+ * @category Documents
+ */
+type DocumentFieldRemovedEvent = ConnectionScopedEvent<{
+  name: 'Document Field Removed';
+  payload: {
+    /**
+     * The BSON type of the removed field.
+     */
+    type: string;
+
+    /**
+     * The view in which the field was removed.
+     */
+    mode: 'list' | 'table' | 'insert';
+  };
+}>;
+
+/**
+ * This event is fired when user cancels editing of a document.
+ *
+ * @category Documents
+ */
+type DocumentUpdateCancelledEvent = ConnectionScopedEvent<{
+  name: 'Document Update Cancelled';
+  payload: {
+    /**
+     * The view used to edit the document.
      */
     mode: 'list' | 'json' | 'table';
   };
@@ -960,6 +1124,74 @@ type DocumentInsertedEvent = ConnectionScopedEvent<{
      * Specifies if the user inserted multiple documents.
      */
     multiple?: boolean;
+  };
+}>;
+
+/**
+ * This event is fired when user cancels the insert document dialog without
+ * inserting.
+ *
+ * @category Documents
+ */
+type DocumentInsertCancelledEvent = ConnectionScopedEvent<{
+  name: 'Document Insert Cancelled';
+  payload: {
+    /**
+     * The view used in the insert document dialog.
+     */
+    mode: 'json' | 'shell' | 'field-by-field';
+  };
+}>;
+
+/**
+ * This event is fired when user fails to insert a document.
+ *
+ * @category Documents
+ */
+type DocumentInsertFailedEvent = ConnectionScopedEvent<{
+  name: 'Document Insert Failed';
+  payload: {
+    /**
+     * The view used in the insert document dialog.
+     */
+    mode: 'json' | 'shell' | 'field-by-field';
+
+    /**
+     * Specifies if the user attempted to insert multiple documents.
+     */
+    multiple?: boolean;
+  };
+}>;
+
+/**
+ * This event is fired when user switches between the List, JSON, and Table
+ * document views in the CRUD toolbar.
+ *
+ * @category Documents
+ */
+type DocumentViewChangedEvent = ConnectionScopedEvent<{
+  name: 'Document View Changed';
+  payload: {
+    /**
+     * The view that was switched to.
+     */
+    view: 'list' | 'json' | 'table';
+  };
+}>;
+
+/**
+ * This event is fired when a user converts Extended JSON to shell syntax from
+ * the banner in the insert document dialog.
+ *
+ * @category Documents
+ */
+type ExtendedJSONConversionAttemptedEvent = ConnectionScopedEvent<{
+  name: 'Extended JSON Conversion Attempted';
+  payload: {
+    /**
+     * The conversion attempt result.
+     */
+    success: boolean;
   };
 }>;
 
@@ -1333,6 +1565,58 @@ type IndexCreateOpenedEvent = ConnectionScopedEvent<{
   };
 }>;
 
+type CreateIndexEventPayload = {
+  /**
+   * Indicates whether the index is unique.
+   */
+  unique?: boolean;
+
+  /**
+   * Specifies the time-to-live (TTL) setting for the index.
+   */
+  ttl?: boolean;
+
+  /**
+   * Indicates whether the index is a columnstore index.
+   */
+  columnstore_index?: boolean;
+
+  /**
+   * Indicates if the index has a columnstore projection.
+   */
+  has_columnstore_projection?: boolean;
+
+  /**
+   * Indicates if the index has a partial filter expression.
+   */
+  has_partial_filter_expression?: boolean;
+
+  /**
+   * Indicates if the index includes a wildcard projection.
+   */
+  has_wildcard_projection?: boolean;
+
+  /**
+   * Specifies if the index uses a custom collation.
+   */
+  custom_collation?: boolean;
+
+  /**
+   * Indicates whether the index is a geospatial index.
+   */
+  geo?: boolean;
+
+  /**
+   * Indicates whether the index is an Atlas Search index.
+   */
+  atlas_search?: boolean;
+
+  /**
+   * Specifies the type of the index.
+   */
+  type?: string;
+};
+
 /**
  * This event is fired when user creates an index.
  *
@@ -1340,53 +1624,7 @@ type IndexCreateOpenedEvent = ConnectionScopedEvent<{
  */
 type IndexCreatedEvent = ConnectionScopedEvent<{
   name: 'Index Created';
-
-  payload: {
-    /**
-     * Indicates whether the index is unique.
-     */
-    unique?: boolean;
-
-    /**
-     * Specifies the time-to-live (TTL) setting for the index.
-     */
-    ttl?: any;
-
-    /**
-     * Indicates whether the index is a columnstore index.
-     */
-    columnstore_index?: boolean;
-
-    /**
-     * Indicates if the index has a columnstore projection.
-     */
-    has_columnstore_projection?: any;
-
-    /**
-     * Indicates if the index includes a wildcard projection.
-     */
-    has_wildcard_projection?: any;
-
-    /**
-     * Specifies if the index uses a custom collation.
-     */
-    custom_collation?: any;
-
-    /**
-     * Indicates whether the index is a geospatial index.
-     */
-    geo?: boolean;
-
-    /**
-     * Indicates whether the index is an Atlas Search index.
-     */
-    atlas_search?: boolean;
-
-    /**
-     * Specifies the type of the index.
-     */
-    type?: string;
-  };
+  payload: CreateIndexEventPayload;
 }>;
 
 /**
@@ -1396,53 +1634,7 @@ type IndexCreatedEvent = ConnectionScopedEvent<{
  */
 type IndexCreateFailedEvent = ConnectionScopedEvent<{
   name: 'Index Create Failed';
-
-  payload: {
-    /**
-     * Indicates whether the index is unique.
-     */
-    unique?: boolean;
-
-    /**
-     * Specifies the time-to-live (TTL) setting for the index.
-     */
-    ttl?: any;
-
-    /**
-     * Indicates whether the index is a columnstore index.
-     */
-    columnstore_index?: boolean;
-
-    /**
-     * Indicates if the index has a columnstore projection.
-     */
-    has_columnstore_projection?: any;
-
-    /**
-     * Indicates if the index includes a wildcard projection.
-     */
-    has_wildcard_projection?: any;
-
-    /**
-     * Specifies if the index uses a custom collation.
-     */
-    custom_collation?: any;
-
-    /**
-     * Indicates whether the index is a geospatial index.
-     */
-    geo?: boolean;
-
-    /**
-     * Indicates whether the index is an Atlas Search index.
-     */
-    atlas_search?: boolean;
-
-    /**
-     * Specifies the type of the index.
-     */
-    type?: string;
-  };
+  payload: CreateIndexEventPayload;
 }>;
 
 /**
@@ -1529,7 +1721,10 @@ type AssistantEntryPointUsedEvent = ConnectionScopedEvent<{
       | 'explain plan'
       | 'performance insights'
       | 'connection error'
-      | 'follow-up prompt';
+      | 'follow-up prompt'
+      | 'analyze output'
+      | 'search stage error'
+      | 'search stage diagnose';
     request_id?: string;
   };
 }>;
@@ -1613,6 +1808,41 @@ type AssistantToolCallApprovalEvent = ConnectionScopedEvent<{
     approved: boolean;
     approval_id: string;
     request_id?: string;
+  };
+}>;
+
+/**
+ * This event is fired when the Atlas connection troubleshooting has completed.
+ *
+ * @category Assistant
+ */
+type AtlasConnectionErrorTroubleshootingSuccessEvent = CommonEvent<{
+  name: 'Atlas Connection Troubleshooting Success';
+  payload: {
+    /**
+     * The state of the cluster the user tried to connect to, as reported by
+     * Atlas, or `Unknown` when the cluster could not be found.
+     */
+    cluster_state: string;
+    /**
+     * Whether we could confirm that the user's IP address is allowed by the
+     * project's IP access list.
+     */
+    ip_access_status?: string;
+    duration: number;
+  };
+}>;
+
+/**
+ * This event is fired when the Atlas connection troubleshooting has failed.
+ *
+ * @category Assistant
+ */
+type AtlasConnectionErrorTroubleshootingFailedEvent = CommonEvent<{
+  name: 'Atlas Connection Troubleshooting Failed';
+  payload: {
+    error_name: string;
+    error_code: string;
   };
 }>;
 
@@ -1717,6 +1947,22 @@ type AiGenerateQueryClickedEvent = CommonEvent<{
   payload: {
     /**
      * The type of query being generated.
+     */
+    type: 'aggregation' | 'query';
+  };
+}>;
+
+/**
+ * This event is fired when a user closes the Generate Query / Aggregation
+ * panel, whether via the close button, Escape, or by cancelling a request.
+ *
+ * @category Gen AI
+ */
+type AiGenerateQueryClosedEvent = CommonEvent<{
+  name: 'AI Generate Query Closed';
+  payload: {
+    /**
+     * The type of query that was being generated.
      */
     type: 'aggregation' | 'query';
   };
@@ -2130,7 +2376,7 @@ type SchemaValidationUpdatedEvent = ConnectionScopedEvent<{
     /**
      * The level of schema validation passed to the driver.
      */
-    validation_level: 'off' | 'moderate' | 'strict';
+    validation_level: 'off' | 'moderate' | 'strict' | 'constraint';
   };
 }>;
 
@@ -2386,7 +2632,34 @@ type PerformancePausedEvent = ConnectionScopedEvent<{
 }>;
 
 /**
- * This event is fired when a user clicks "next" on a guide cue.
+ * This event is fired when a guide cue is shown to the user.
+ *
+ * @category Guide Cues
+ */
+type GuideCueShownEvent = CommonEvent<{
+  name: 'Guide Cue Shown';
+  payload: {
+    /**
+     * The unique identifier of the group of guide cues to which this cue belongs.
+     * This field is only set for guide cues belonging to a group.
+     */
+    groupId?: string;
+
+    /**
+     * The unique identifier of the specific guide cue that was shown.
+     */
+    cueId: string;
+
+    /**
+     * The step number within the guide cue sequence that was shown.
+     */
+    step: number;
+  };
+}>;
+
+/**
+ * This event is fired when a user clicks the action like
+ * "next" or "got it" on a guide cue.
  *
  * @category Guide Cues
  */
@@ -2667,6 +2940,36 @@ type CollectionCreatedEvent = ConnectionScopedEvent<{
 }>;
 
 /**
+ * This event is fired when a collection is successfully dropped.
+ *
+ * @category Database / Collection List
+ */
+type CollectionDroppedEvent = ConnectionScopedEvent<{
+  name: 'Collection Dropped';
+  payload: Record<string, never>;
+}>;
+
+/**
+ * This event is fired when a collection is successfully renamed.
+ *
+ * @category Database / Collection List
+ */
+type CollectionRenamedEvent = ConnectionScopedEvent<{
+  name: 'Collection Renamed';
+  payload: Record<string, never>;
+}>;
+
+/**
+ * This event is fired when a database is successfully dropped.
+ *
+ * @category Database / Collection List
+ */
+type DatabaseDroppedEvent = ConnectionScopedEvent<{
+  name: 'Database Dropped';
+  payload: Record<string, never>;
+}>;
+
+/**
  * This event is fired when a database is created.
  *
  * @category Database / Collection List
@@ -2859,6 +3162,13 @@ type ApplicationLaunchedEvent = CommonEvent<{
     readOnly: boolean;
 
     /**
+     * Whether Atlas sign in is enabled at launch. Can only be disabled through
+     * the global configuration file, so this indicates a managed installation
+     * that opted out of Atlas sign in.
+     */
+    enableAtlasSignIn: boolean;
+
+    /**
      * The value of the `maxTimeMS` preference at launch.
      */
     maxTimeMS?: number;
@@ -2872,35 +3182,6 @@ type ApplicationLaunchedEvent = CommonEvent<{
      * Whether any preferences were specified using CLI arguments.
      */
     cli_args: boolean;
-
-    /**
-     * Whether Compass discovered any connections in the legacy connection format
-     * (prior to COMPASS-5490 'Remove storage-mixin' from summer 2023).
-     */
-    legacy_connections: boolean;
-  };
-}>;
-
-/**
- * This event is fired when the keytar migration fails for a user.
- * See: https://jira.mongodb.org/browse/COMPASS-6856.
- *
- * NOTE: Should be removed as part of https://jira.mongodb.org/browse/COMPASS-7948.
- *
- * @category Other
- */
-type KeytarSecretsMigrationFailedEvent = CommonEvent<{
-  name: 'Keytar Secrets Migration Failed';
-  payload: {
-    /**
-     * The number of connections that were successfully saved.
-     */
-    num_saved_connections: number;
-
-    /**
-     * The number of connections that failed to save during the migration.
-     */
-    num_failed_connections: number;
   };
 }>;
 
@@ -3946,6 +4227,26 @@ type SearchExtensionRateLimitPageLinkClickedEvent = CommonEvent<{
   };
 }>;
 
+/**
+ * This event is fired when a user applies the safe integer fix using
+ * codemirror annotation.
+ *
+ * @category Other
+ */
+type SafeIntegerFixAppliedEvent = CommonEvent<{
+  name: 'Safe Integer Fix Applied';
+  payload: {
+    source:
+      | 'pipeline-editor'
+      | 'stage-editor'
+      | 'insert-document-editor-json'
+      | 'insert-document-editor-shell'
+      | 'document-json-editor'
+      | 'query-bar-editor'
+      | 'bulk-update-editor';
+  };
+}>;
+
 export type TelemetryEvent =
   | AggregationCanceledEvent
   | AggregationCopiedEvent
@@ -3969,9 +4270,12 @@ export type TelemetryEvent =
   | AssistantEntryPointUsedEvent
   | AssistantConfirmationSubmittedEvent
   | AssistantResponseGeneratedEvent
+  | AtlasConnectionErrorTroubleshootingSuccessEvent
+  | AtlasConnectionErrorTroubleshootingFailedEvent
   | AiOptInModalShownEvent
   | AiOptInModalDismissedEvent
   | AiGenerateQueryClickedEvent
+  | AiGenerateQueryClosedEvent
   | AiPromptSubmittedEvent
   | AiQueryFeedbackEvent
   | AiResponseFailedEvent
@@ -3979,7 +4283,11 @@ export type TelemetryEvent =
   | ApplicationLaunchedEvent
   | AtlasLinkClickedEvent
   | AtlasSearchIndexesForViewLinkClickedEvent
+  | AtlasSignInCanceledEvent
   | AtlasSignInErrorEvent
+  | AtlasSignInTimedOutEvent
+  | AtlasSignInPromptShownEvent
+  | AtlasSignInStartedEvent
   | AtlasSignInSuccessEvent
   | AtlasSignOutEvent
   | AutoupdateAcceptedEvent
@@ -3993,6 +4301,8 @@ export type TelemetryEvent =
   | BulkUpdateFavoritedEvent
   | BulkUpdateOpenedEvent
   | CollectionCreatedEvent
+  | CollectionDroppedEvent
+  | CollectionRenamedEvent
   | ConnectionAttemptEvent
   | ConnectionCreatedEvent
   | ConnectionDisconnectedEvent
@@ -4003,6 +4313,7 @@ export type TelemetryEvent =
   | CreateSearchIndexForViewClickedEvent
   | CurrentOpShowOperationDetailsEvent
   | DatabaseCreatedEvent
+  | DatabaseDroppedEvent
   | DataModelingDiagramCollectionAdded
   | DataModelingDiagramCollectionRemoved
   | DataModelingDiagramCollectionRenamed
@@ -4033,8 +4344,14 @@ export type TelemetryEvent =
   | DocumentClonedEvent
   | DocumentCopiedEvent
   | DocumentDeletedEvent
+  | DocumentFieldAddedEvent
+  | DocumentFieldRemovedEvent
+  | DocumentInsertCancelledEvent
+  | DocumentInsertFailedEvent
   | DocumentInsertedEvent
+  | DocumentUpdateCancelledEvent
   | DocumentUpdatedEvent
+  | DocumentViewChangedEvent
   | DrawerSectionOpenedEvent
   | DrawerSectionClosedEvent
   | EditorTypeChangedEvent
@@ -4042,10 +4359,13 @@ export type TelemetryEvent =
   | ExplainPlanExecutedEvent
   | ExportCompletedEvent
   | ExportOpenedEvent
+  | ExtendedJSONConversionAttemptedEvent
   | FocusModeClosedEvent
   | FocusModeOpenedEvent
+  | GuideCueShownEvent
   | GuideCueDismissedEvent
   | GuideCueGroupDismissedEvent
+  | IdentifyEvent
   | ImportCompletedEvent
   | ImportErrorLogOpenedEvent
   | ImportOpenedEvent
@@ -4054,7 +4374,6 @@ export type TelemetryEvent =
   | IndexCreateOpenedEvent
   | IndexDroppedEvent
   | IndexEditedEvent
-  | KeytarSecretsMigrationFailedEvent
   | MyQueriesFilterEvent
   | MyQueriesSearchEvent
   | MyQueriesSortEvent
@@ -4154,4 +4473,5 @@ export type TelemetryEvent =
   | RerankViewUsageAndRateLimitsLinkClickedEvent
   | SearchExtensionRateLimitBannerShownEvent
   | SearchExtensionRateLimitBillingLinkClickedEvent
-  | SearchExtensionRateLimitPageLinkClickedEvent;
+  | SearchExtensionRateLimitPageLinkClickedEvent
+  | SafeIntegerFixAppliedEvent;

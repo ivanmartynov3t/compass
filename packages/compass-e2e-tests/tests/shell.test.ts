@@ -93,7 +93,7 @@ describe('Shell', function () {
 
       const output = await getShellOutputText(browser);
       expect(output.slice(0, 3)).to.deep.equal([
-        'use my-sidebar-database',
+        'use("my-sidebar-database")',
         'switched to db my-sidebar-database',
         'db["my-sidebar-collection"].find()',
       ]);
@@ -115,7 +115,7 @@ describe('Shell', function () {
   binData: Binary.createFromBase64('AQID', 0),
   objectId: ObjectId('642d766c7300158b1f22e975'),
   boolean: true,
-  date: 2023-04-05T13:25:08.445Z,
+  date: ISODate('2023-04-05T13:25:08.445Z'),
   null: null,
   regex: BSONRegExp('pattern', 'i'),
   javascript: Code('function() {}'),

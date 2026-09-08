@@ -48,6 +48,7 @@ type QueryBarState = {
   host?: string;
   recentQueries: RecentQuery[];
   favoriteQueries: FavoriteQuery[];
+  isInterpretLoading: boolean;
 };
 
 export const INITIAL_STATE: QueryBarState = {
@@ -60,6 +61,7 @@ export const INITIAL_STATE: QueryBarState = {
   namespace: '',
   recentQueries: [],
   favoriteQueries: [],
+  isInterpretLoading: false,
 };
 
 export const QueryBarActions = {
@@ -67,12 +69,15 @@ export const QueryBarActions = {
     'compass-query-bar/ChangeReadonlyConnectionStatus',
   ToggleQueryOptions: 'compass-query-bar/ToggleQueryOptions',
   ChangeField: 'compass-query-bar/ChangeField',
+  QueryUnsafeIntegerReceived: 'compass-query-bar/QueryUnsafeIntegerAdded',
   SetQuery: 'compass-query-bar/SetQuery',
   ApplyQuery: 'compass-query-bar/ApplyQuery',
   ResetQuery: 'compass-query-bar/ResetQuery',
   ApplyFromHistory: 'compass-query-bar/ApplyFromHistory',
   RecentQueriesFetched: 'compass-query-bar/RecentQueriesFetched',
   FavoriteQueriesFetched: 'compass-query-bar/FavoriteQueriesFetched',
+  InterpretStarted: 'compass-query-bar/InterpretStarted',
+  InterpretFinished: 'compass-query-bar/InterpretFinished',
 } as const;
 
 type ChangeReadonlyConnectionStatusAction = {
@@ -96,6 +101,22 @@ type ChangeFieldAction<T = QueryProperty> = {
   name: T;
   value: FormField<T>;
 };
+
+type QueryUnsafeIntegerReceivedAction = {
+  type: typeof QueryBarActions.QueryUnsafeIntegerReceived;
+};
+
+export function unsafeIntegerReceived(
+  name: QueryProperty
+): QueryBarThunkAction<void, QueryUnsafeIntegerReceivedAction> {
+  return (dispatch) => {
+    if (name === 'filter') {
+      dispatch({
+        type: QueryBarActions.QueryUnsafeIntegerReceived,
+      });
+    }
+  };
+}
 
 export const changeField = (
   name: QueryProperty,
@@ -220,6 +241,9 @@ export const openExportToLanguage = (): QueryBarThunkAction<void> => {
 type ApplyFromHistoryAction = {
   type: typeof QueryBarActions.ApplyFromHistory;
   fields: QueryFormFields;
+  // bulk update queries: the bulk update modal reads its
+  // filter from the last applied query
+  applyToSource?: string;
 };
 
 export const applyFromHistory = (
@@ -245,6 +269,7 @@ export const applyFromHistory = (
     dispatch({
       type: QueryBarActions.ApplyFromHistory,
       fields,
+      applyToSource: query.update ? 'crud' : undefined,
     });
 
     if (query.update) {
@@ -569,6 +594,24 @@ export const queryBarReducer: Reducer<QueryBarState, Action> = (
     };
   }
 
+  if (
+    isAction<QueryUnsafeIntegerReceivedAction>(
+      action,
+      QueryBarActions.QueryUnsafeIntegerReceived
+    )
+  ) {
+    return {
+      ...state,
+      fields: {
+        ...state.fields,
+        filter: {
+          ...state.fields.filter,
+          valid: false,
+        },
+      },
+    };
+  }
+
   if (isAction<SetQueryAction>(action, QueryBarActions.SetQuery)) {
     return {
       ...state,
@@ -614,6 +657,15 @@ export const queryBarReducer: Reducer<QueryBarState, Action> = (
       ...state,
       expanded: state.expanded || doesQueryHaveExtraOptionsSet(action.fields),
       fields: action.fields,
+      lastAppliedQuery: action.applyToSource
+        ? {
+            source: action.applyToSource,
+            query: {
+              ...state.lastAppliedQuery.query,
+              [action.applyToSource]: mapFormFieldsToQuery(action.fields),
+            },
+          }
+        : state.lastAppliedQuery,
     };
   }
 
@@ -652,6 +704,14 @@ export const queryBarReducer: Reducer<QueryBarState, Action> = (
       ...state,
       favoriteQueries: action.favorites,
     };
+  }
+
+  if (isAction<Action>(action, QueryBarActions.InterpretStarted)) {
+    return { ...state, isInterpretLoading: true };
+  }
+
+  if (isAction<Action>(action, QueryBarActions.InterpretFinished)) {
+    return { ...state, isInterpretLoading: false };
   }
 
   return state;

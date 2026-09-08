@@ -9,6 +9,7 @@ import {
   css,
   cx,
   DocumentList,
+  Link,
   palette,
   spacing,
   useCurrentValueRef,
@@ -17,12 +18,14 @@ import {
 import type { Document } from 'hadron-document';
 import HadronDocument from 'hadron-document';
 import {
-  createDocumentAutocompleter,
   CodemirrorMultilineEditor,
+  useSafeIntegerLinter,
 } from '@mongodb-js/compass-editor';
 import type { EditorRef, Action } from '@mongodb-js/compass-editor';
 import type { CrudActions } from '../stores/crud-store';
-import { useAutocompleteFields } from '@mongodb-js/compass-field-store';
+import { useDocumentAutocompleter } from '../hooks/use-document-autocompleter';
+import { getSafeIntegerViolationMessage } from '../utils';
+import { useTelemetry } from '@mongodb-js/compass-telemetry/provider';
 
 const editorStyles = css({
   minHeight: spacing[800] + spacing[400],
@@ -47,6 +50,17 @@ const editorDarkModeStyles = css({
 
 const actionsGroupStyles = css({
   padding: spacing[200],
+});
+
+const bannerContentStyles = css({
+  display: 'flex',
+  flexDirection: 'row',
+  gap: spacing[200],
+  justifyContent: 'flex-start',
+});
+
+const footerActionButtonStyles = css({
+  flexShrink: 0,
 });
 
 export type JSONEditorProps = {
@@ -99,7 +113,7 @@ const JSONEditor: React.FunctionComponent<JSONEditorProps> = ({
   }, [value, editing, setModifiedEJSONStringRef]);
 
   const handleCopy = useCallback(() => {
-    copyToClipboard?.(doc);
+    copyToClipboard?.(doc, 'ejson');
   }, [copyToClipboard, doc]);
 
   const handleClone = useCallback(() => {
@@ -172,15 +186,7 @@ const JSONEditor: React.FunctionComponent<JSONEditorProps> = ({
     setExpanded(false);
   }, []);
 
-  const fields = useAutocompleteFields(namespace);
-
-  const completer = useMemo(() => {
-    return createDocumentAutocompleter(
-      fields.map((field) => {
-        return field.name;
-      })
-    );
-  }, [fields]);
+  const completer = useDocumentAutocompleter(namespace);
 
   const isEditable = editable && !deleting && !isTimeSeries;
 
@@ -291,6 +297,21 @@ const JSONEditor: React.FunctionComponent<JSONEditorProps> = ({
     }, 0);
   }, [expanded]);
 
+  const track = useTelemetry();
+  const {
+    safeIntegerLinter,
+    violations: safeIntegerViolations,
+    onFixViolations: onFixSafeIntegerViolations,
+  } = useSafeIntegerLinter({
+    editorRef,
+    onFixViolation: (source: string) => `{"$numberLong": "${source}"}`,
+    onViolationFixed: () => {
+      track('Safe Integer Fix Applied', {
+        source: 'document-json-editor',
+      });
+    },
+  });
+
   return (
     <div data-testid="editable-json">
       <CodemirrorMultilineEditor
@@ -311,6 +332,7 @@ const JSONEditor: React.FunctionComponent<JSONEditorProps> = ({
         completer={completer}
         onExpand={editing ? undefined : toggleExpandCollapse}
         expanded={expanded}
+        linter={safeIntegerLinter}
       />
       <DocumentList.DocumentEditActionsFooter
         doc={doc}
@@ -318,10 +340,36 @@ const JSONEditor: React.FunctionComponent<JSONEditorProps> = ({
         editing={!!editing}
         deleting={!!deleting}
         modified={value !== initialValue}
-        validationError={docValidationError}
+        validationError={
+          docValidationError ??
+          (safeIntegerViolations.length > 0
+            ? new Error(
+                getSafeIntegerViolationMessage(safeIntegerViolations.length)
+              )
+            : null)
+        }
         onUpdate={onUpdate}
         onDelete={onDelete}
         onCancel={onCancel}
+        renderStatusMessage={(message) => {
+          return (
+            <div className={bannerContentStyles}>
+              <span>{message}</span>
+              {!docValidationError && safeIntegerViolations.length > 0 && (
+                <Link
+                  as="button"
+                  data-testid="fix-safe-integer-violations-button"
+                  onClick={onFixSafeIntegerViolations}
+                  className={footerActionButtonStyles}
+                >
+                  {safeIntegerViolations.length === 1
+                    ? 'Convert to Long'
+                    : 'Convert all to Long'}
+                </Link>
+              )}
+            </div>
+          );
+        }}
       />
     </div>
   );

@@ -11,11 +11,13 @@ import {
   createServiceLocator,
   createServiceProvider,
 } from '@mongodb-js/compass-app-registry';
+import { atlasAdminApiServiceLocator } from '@mongodb-js/atlas-admin-api/provider';
+import { telemetryLocator } from '@mongodb-js/compass-telemetry/provider';
 
 const AtlasAiServiceContext = createContext<AtlasAiService | null>(null);
 
 export const AtlasAiServiceProvider: React.FC<{
-  apiURLPreset: 'admin-api' | 'cloud';
+  apiURLPreset: 'private-api' | 'cloud';
 }> = createServiceProvider(function AtlasAiServiceProvider({
   apiURLPreset,
   children,
@@ -59,6 +61,9 @@ const ToolsControllerContext = createContext<ToolsController | null>(null);
 export const ToolsControllerProvider: React.FC = createServiceProvider(
   function ToolsControllerProvider({ children }) {
     const logger = useLogger('TOOLS-CONTROLLER');
+    const preferences = preferencesLocator();
+    const atlasAdminApi = atlasAdminApiServiceLocator();
+    const track = telemetryLocator();
 
     const telemetryAnonymousId = usePreference('telemetryAnonymousId');
 
@@ -66,10 +71,13 @@ export const ToolsControllerProvider: React.FC = createServiceProvider(
       return new ToolsController({
         logger,
         getTelemetryAnonymousId: () => telemetryAnonymousId ?? '',
+        track,
         // we will set this later through setContext()
-        enableTelemetry: false,
+        enableMCPTelemetry: false,
+        preferences,
+        atlasAdminApi,
       });
-    }, [logger, telemetryAnonymousId]);
+    }, [logger, telemetryAnonymousId, track, preferences, atlasAdminApi]);
 
     useEffect(() => {
       return () => {
@@ -104,7 +112,12 @@ export type { ToolGroup } from './tools-controller';
 // Export the hook for direct use in components
 export const useToolsController = useToolsControllerContext;
 
-export { AVAILABLE_TOOLS, READ_ONLY_DATABASE_TOOLS } from './available-tools';
+export {
+  getAvailableTools,
+  READ_ONLY_DATABASE_TOOLS,
+  doesToolUseConnection,
+  isReadOnlyTool,
+} from './available-tools';
 export { AI_MODEL_CHAT_VERSION, AI_MODEL_SLIM_VERSION } from './model-version';
 
 export {
@@ -125,3 +138,5 @@ export type {
 } from './atlas-ai-service';
 
 export { mockDataSchemaToolSchema } from './atlas-ai-service';
+
+export type { AtlasConnectionDebugResult } from './tools/debug-connection';

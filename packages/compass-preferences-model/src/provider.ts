@@ -5,7 +5,6 @@ export {
   isPreferenceNameValid,
   useIsAIFeatureEnabled,
   isAIFeatureEnabled,
-  useHasAIFeatureCloudRolloutAccess,
   proxyPreferenceToProxyOptions,
   proxyOptionsToProxyPreference,
 } from './utils';
@@ -20,3 +19,4 @@ export {
 export type * from './preferences-schema';
 export type { DevtoolsProxyOptions } from '@mongodb-js/devtools-proxy-support';
 export type { ParsedGlobalPreferencesResult } from './global-config';
+export { TIMEZONES, timezoneObservesDaylightSavings } from './timezone';

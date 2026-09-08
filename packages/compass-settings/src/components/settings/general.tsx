@@ -1,10 +1,11 @@
 import React from 'react';
 import SettingsList from './settings-list';
 
-const generalFields = [
+export const generalFields = [
   'readOnly',
   'enableShell',
   'protectConnectionStrings',
+  'timezone',
   'defaultSortOrder',
   'showKerberosPasswordField',
   'maxTimeMS',

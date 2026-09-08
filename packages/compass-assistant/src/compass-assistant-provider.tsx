@@ -21,10 +21,16 @@ import {
 import {
   buildConnectionErrorPrompt,
   buildContextPrompt,
+  buildDiagnoseSearchStagePrompt,
   buildExplainPlanPrompt,
   buildProactiveInsightsPrompt,
+  buildAnalyzeOutputPrompt,
+  buildDebugSearchErrorPrompt,
+  type DiagnoseSearchStageContext,
   type EntryPointMessage,
   type ProactiveInsightsContext,
+  type AnalyzeOutputContext,
+  type DebugSearchErrorContext,
 } from './prompts';
 import {
   type PreferencesAccess,
@@ -54,6 +60,8 @@ import {
   toolsControllerLocator,
 } from '@mongodb-js/compass-generative-ai/provider';
 import { buildConversationInstructionsPrompt } from './prompts';
+import type { AtlasAdminApiService } from '@mongodb-js/atlas-admin-api/provider';
+import { atlasAdminApiServiceLocator } from '@mongodb-js/atlas-admin-api/provider';
 import { createOpenAI } from '@ai-sdk/openai';
 import type {
   ActiveConnectionInfo,
@@ -105,7 +113,10 @@ export type AssistantMessage = UIMessage & {
       | 'explain plan'
       | 'performance insights'
       | 'connection error'
-      | 'follow-up prompt';
+      | 'follow-up prompt'
+      | 'analyze output'
+      | 'search stage error'
+      | 'search stage diagnose';
     /** Information for confirmation messages. */
     confirmation?: {
       description: string;
@@ -169,6 +180,9 @@ type AssistantActionsContextType = {
     error: Error;
   }) => void;
   tellMoreAboutInsight?: (context: ProactiveInsightsContext) => void;
+  interpretAnalyzeOutput?: (context: AnalyzeOutputContext) => void;
+  debugSearchError?: (context: DebugSearchErrorContext) => void;
+  diagnoseSearchStage?: (context: DiagnoseSearchStageContext) => void;
   ensureOptInAndSend?: (
     message: SendMessage,
     options: SendOptions,
@@ -177,6 +191,7 @@ type AssistantActionsContextType = {
       connectionInfo?: BasicConnectionInfo;
     }) => void
   ) => Promise<void>;
+  atlasAdminApi?: AtlasAdminApiService;
 };
 
 type AssistantActionsType = Omit<
@@ -191,6 +206,9 @@ export const AssistantActionsContext =
     interpretExplainPlan: () => {},
     interpretConnectionError: () => {},
     tellMoreAboutInsight: () => {},
+    interpretAnalyzeOutput: () => {},
+    debugSearchError: () => {},
+    diagnoseSearchStage: () => {},
     ensureOptInAndSend: async () => {},
   });
 
@@ -209,14 +227,31 @@ export function useAssistantActions(): AssistantActionsType {
     interpretExplainPlan,
     interpretConnectionError,
     tellMoreAboutInsight,
+    interpretAnalyzeOutput,
+    debugSearchError,
+    diagnoseSearchStage,
   } = actions;
 
   return {
     interpretExplainPlan,
     interpretConnectionError,
     tellMoreAboutInsight,
+    interpretAnalyzeOutput,
+    debugSearchError,
+    diagnoseSearchStage,
     getIsAssistantEnabled: () => true,
   };
+}
+
+/**
+ * Access the Atlas Admin API service from within the assistant.
+ */
+export function useAtlasAdminApi(): AtlasAdminApiService {
+  const { atlasAdminApi } = useContext(AssistantActionsContext);
+  if (!atlasAdminApi) {
+    throw new Error('No AtlasAdminApiService available in this context');
+  }
+  return atlasAdminApi;
 }
 
 export const compassAssistantServiceLocator = createServiceLocator(() => {
@@ -277,11 +312,13 @@ export type AssistantState = Record<string, never>;
 type AssistantExtraArgs = {
   chat: Chat<AssistantMessage>;
   atlasAiService: AtlasAiService;
+  atlasAdminApi: AtlasAdminApiService;
   toolsController: ToolsController;
   preferences: PreferencesAccess;
   logger: Logger;
   track: TrackFunction;
   lastContextPromptRef: { current: string | null };
+  atlasService: AtlasService;
 };
 
 export type AssistantThunkAction<R, A extends Action = AnyAction> = ThunkAction<
@@ -291,9 +328,7 @@ export type AssistantThunkAction<R, A extends Action = AnyAction> = ThunkAction<
   A
 >;
 
-const reducer = (
-  state: AssistantState = {} as AssistantState
-): AssistantState => state;
+const reducer = (state: AssistantState = {}): AssistantState => state;
 
 // Thunk action for the core send logic
 export function ensureOptInAndSendThunk(
@@ -354,6 +389,8 @@ export function ensureOptInAndSendThunk(
     const enableToolCalling = prefs.enableToolCalling;
     const enableGenAIToolCalling =
       prefs.enableGenAIToolCallingAtlasProject && prefs.enableGenAIToolCalling;
+    const enableAtlasConnectionErrorDebugger =
+      prefs.enableAtlasConnectionErrorDebugger;
 
     if (enableToolCalling && enableGenAIToolCalling) {
       // Start the server once the first time both the feature flag and
@@ -400,6 +437,7 @@ export function ensureOptInAndSendThunk(
       activeCollectionMetadata,
       activeCollectionSubTab,
       enableGenAIToolCalling: enableToolCalling && enableGenAIToolCalling,
+      enableAtlasConnectionErrorDebugger,
     });
 
     // use just the text so we have a stable reference to compare against
@@ -441,7 +479,7 @@ export function ensureOptInAndSendThunk(
       ? activeCollectionSubTab || activeWorkspace.type
       : null;
     setToolsContext(toolsController, {
-      enableTelemetry: prefs.trackUsageStatistics,
+      enableMCPTelemetry: prefs.trackUsageStatistics,
       maxTimeMS: prefs.maxTimeMS,
       activeConnection,
       connections: activeConnections,
@@ -483,14 +521,20 @@ export function ensureOptInAndSendThunk(
 
 // Thunk action for entry point handlers
 function handleEntryPoint<T>(
-  entryPointName: 'explain plan' | 'performance insights' | 'connection error',
-  builder: (props: T) => EntryPointMessage,
+  entryPointName:
+    | 'explain plan'
+    | 'performance insights'
+    | 'connection error'
+    | 'analyze output'
+    | 'search stage error'
+    | 'search stage diagnose',
+  builder: (props: T, preferences: PreferencesAccess) => EntryPointMessage,
   props: T,
   globalState: GlobalState,
   openDrawer: (id: string) => void
 ): AssistantThunkAction<void> {
-  return (dispatch, _getState, { track }) => {
-    const { prompt, metadata } = builder(props);
+  return (dispatch, _getState, { track, preferences }) => {
+    const { prompt, metadata } = builder(props, preferences);
     void dispatch(
       ensureOptInAndSendThunk(
         {
@@ -549,7 +593,11 @@ function interpretConnectionErrorThunk(
 ): AssistantThunkAction<void> {
   return handleEntryPoint(
     'connection error',
-    buildConnectionErrorPrompt,
+    (entryPointProps, preferences) =>
+      buildConnectionErrorPrompt({
+        ...entryPointProps,
+        enableAtlasSignIn: preferences.getPreferences().enableAtlasSignIn,
+      }),
     props,
     globalState,
     openDrawer
@@ -564,6 +612,48 @@ function tellMoreAboutInsightThunk(
   return handleEntryPoint(
     'performance insights',
     buildProactiveInsightsPrompt,
+    props,
+    globalState,
+    openDrawer
+  );
+}
+
+function interpretAnalyzeOutputThunk(
+  props: AnalyzeOutputContext,
+  globalState: GlobalState,
+  openDrawer: (id: string) => void
+): AssistantThunkAction<void> {
+  return handleEntryPoint(
+    'analyze output',
+    buildAnalyzeOutputPrompt,
+    props,
+    globalState,
+    openDrawer
+  );
+}
+
+function debugSearchErrorThunk(
+  props: DebugSearchErrorContext,
+  globalState: GlobalState,
+  openDrawer: (id: string) => void
+): AssistantThunkAction<void> {
+  return handleEntryPoint(
+    'search stage error',
+    buildDebugSearchErrorPrompt,
+    props,
+    globalState,
+    openDrawer
+  );
+}
+
+function diagnoseSearchStageThunk(
+  props: DiagnoseSearchStageContext,
+  globalState: GlobalState,
+  openDrawer: (id: string) => void
+): AssistantThunkAction<void> {
+  return handleEntryPoint(
+    'search stage diagnose',
+    buildDiagnoseSearchStagePrompt,
     props,
     globalState,
     openDrawer
@@ -585,6 +675,7 @@ function activateAssistantPlugin(
   {
     atlasService,
     atlasAiService,
+    atlasAdminApi,
     toolsController,
     preferences,
     logger,
@@ -592,6 +683,7 @@ function activateAssistantPlugin(
   }: {
     atlasService: AtlasService;
     atlasAiService: AtlasAiService;
+    atlasAdminApi: AtlasAdminApiService;
     toolsController: ToolsController;
     preferences: PreferencesAccess;
     logger: Logger;
@@ -619,6 +711,7 @@ function activateAssistantPlugin(
       thunk.withExtraArgument({
         chat,
         atlasAiService,
+        atlasAdminApi,
         toolsController,
         preferences,
         logger,
@@ -636,11 +729,17 @@ function getChat(): AssistantThunkAction<Chat<AssistantMessage>> {
   return (_dispatch, _getState, { chat }) => chat;
 }
 
+// Getter thunk to access the Atlas Admin API service from extra args
+function getAtlasAdminApi(): AssistantThunkAction<AtlasAdminApiService> {
+  return (_dispatch, _getState, { atlasAdminApi }) => atlasAdminApi;
+}
+
 // Connected AssistantProvider component
 const AssistantProviderInner: React.FunctionComponent<
   PropsWithChildren<{
     projectId?: string;
     getChat: () => Chat<AssistantMessage>;
+    getAtlasAdminApi: () => AtlasAdminApiService;
     ensureOptInAndSend: (
       message: SendMessage,
       options: SendOptions,
@@ -672,18 +771,38 @@ const AssistantProviderInner: React.FunctionComponent<
       globalState: GlobalState,
       openDrawer: (id: string) => void
     ) => void;
+    interpretAnalyzeOutput: (
+      props: AnalyzeOutputContext,
+      globalState: GlobalState,
+      openDrawer: (id: string) => void
+    ) => void;
+    debugSearchError: (
+      props: DebugSearchErrorContext,
+      globalState: GlobalState,
+      openDrawer: (id: string) => void
+    ) => void;
+    diagnoseSearchStage: (
+      props: DiagnoseSearchStageContext,
+      globalState: GlobalState,
+      openDrawer: (id: string) => void
+    ) => void;
   }>
 > = ({
   projectId,
   getChat: getChatAction,
+  getAtlasAdminApi: getAtlasAdminApiAction,
   ensureOptInAndSend,
   interpretExplainPlan,
   interpretConnectionError,
   tellMoreAboutInsight,
+  interpretAnalyzeOutput,
+  debugSearchError,
+  diagnoseSearchStage,
   children,
 }) => {
   // chat is stable — created once in activate, never changes
   const [chat] = React.useState(() => getChatAction());
+  const [atlasAdminApi] = React.useState(() => getAtlasAdminApiAction());
   const { openDrawer } = useDrawerActions();
 
   const assistantGlobalStateRef = useCurrentValueRef(useAssistantGlobalState());
@@ -711,6 +830,27 @@ const AssistantProviderInner: React.FunctionComponent<
         openDrawerRef.current
       );
     },
+    interpretAnalyzeOutput: (props) => {
+      interpretAnalyzeOutput(
+        props,
+        assistantGlobalStateRef.current,
+        openDrawerRef.current
+      );
+    },
+    debugSearchError: (props) => {
+      debugSearchError(
+        props,
+        assistantGlobalStateRef.current,
+        openDrawerRef.current
+      );
+    },
+    diagnoseSearchStage: (props) => {
+      diagnoseSearchStage(
+        props,
+        assistantGlobalStateRef.current,
+        openDrawerRef.current
+      );
+    },
     ensureOptInAndSend: async (message, options, callback) => {
       await ensureOptInAndSend(
         message,
@@ -719,6 +859,7 @@ const AssistantProviderInner: React.FunctionComponent<
         assistantGlobalStateRef.current
       );
     },
+    atlasAdminApi,
   });
 
   return (
@@ -734,10 +875,14 @@ const AssistantProviderInner: React.FunctionComponent<
 
 const ConnectedAssistantProvider = connect(null, {
   getChat,
+  getAtlasAdminApi,
   ensureOptInAndSend: ensureOptInAndSendThunk,
   interpretExplainPlan: interpretExplainPlanThunk,
   interpretConnectionError: interpretConnectionErrorThunk,
   tellMoreAboutInsight: tellMoreAboutInsightThunk,
+  interpretAnalyzeOutput: interpretAnalyzeOutputThunk,
+  debugSearchError: debugSearchErrorThunk,
+  diagnoseSearchStage: diagnoseSearchStageThunk,
 })(AssistantProviderInner);
 
 export const CompassAssistantProvider = registerCompassPlugin(
@@ -765,6 +910,7 @@ export const CompassAssistantProvider = registerCompassPlugin(
   {
     atlasService: atlasServiceLocator,
     atlasAiService: atlasAiServiceLocator,
+    atlasAdminApi: atlasAdminApiServiceLocator,
     atlasAuthService: atlasAuthServiceLocator,
     toolsController: toolsControllerLocator,
     track: telemetryLocator,
@@ -853,7 +999,7 @@ export function createDefaultChat({
 export function setToolsContext(
   toolsController: ToolsController,
   {
-    enableTelemetry,
+    enableMCPTelemetry,
     maxTimeMS,
     activeConnection,
     connections,
@@ -863,7 +1009,7 @@ export function setToolsContext(
     enableGenAIToolCalling,
     activeTab,
   }: {
-    enableTelemetry: boolean;
+    enableMCPTelemetry: boolean;
     maxTimeMS?: number;
     activeConnection: ActiveConnectionInfo | null;
     connections: ActiveConnectionInfo[];
@@ -889,7 +1035,7 @@ export function setToolsContext(
     }
     toolsController.setActiveTools(toolGroups);
     toolsController.setContext({
-      enableTelemetry,
+      enableMCPTelemetry,
       maxTimeMS,
       connections: connections.map((connection) => {
         if (!connection.connectOptions) {
@@ -909,7 +1055,7 @@ export function setToolsContext(
   } else {
     toolsController.setActiveTools(new Set([]));
     toolsController.setContext({
-      enableTelemetry,
+      enableMCPTelemetry,
       maxTimeMS,
       connections: [],
       query: undefined,

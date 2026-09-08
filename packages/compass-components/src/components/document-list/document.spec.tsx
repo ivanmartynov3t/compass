@@ -7,6 +7,7 @@ import {
   within,
   waitFor,
   userEvent,
+  fireEvent,
 } from '@mongodb-js/testing-library-compass';
 import HadronDocument from 'hadron-document';
 import Document from './document';
@@ -54,6 +55,18 @@ describe('Document', function () {
 
     expect(screen.getByText('date')).to.exist;
     expect(screen.getByTitle('1970-01-01T00:00:00.000+00:00')).to.exist;
+  });
+
+  it('renders a readonly document with no fields as an empty document', function () {
+    render(<Document value={new HadronDocument({})}></Document>);
+    const empty = screen.getByTestId('readonly-document-empty');
+    expect(empty).to.exist;
+    expect(empty.textContent).to.equal('(empty document)');
+  });
+
+  it('does not render the empty document placeholder for editable documents', function () {
+    render(<Document value={new HadronDocument({})} editable></Document>);
+    expect(screen.queryByTestId('readonly-document-empty')).to.not.exist;
   });
 
   describe('edit mode', function () {
@@ -144,6 +157,34 @@ describe('Document', function () {
         '2000-01-01T00:00:00.000Z'
       );
       expect(doc.get('date')?.currentType).to.eq('Date');
+    });
+
+    it('should change element date value with the native date picker', function () {
+      const newDate = new Date('2000-01-01T01:02:03.004Z');
+      render(<Document value={doc} editable editing></Document>);
+      doc.get('date')?.edit(newDate);
+
+      const el = document.querySelector<HTMLElement>(
+        `[data-id="${doc.get('date')?.uuid}"]`
+      );
+      if (!el) {
+        throw new Error('Could not find element');
+      }
+
+      const picker = within(el).getByTestId<HTMLInputElement>(
+        'hadron-document-date-picker'
+      );
+
+      expect(picker.value).to.eq('2000-01-01T01:02:03.004');
+
+      fireEvent.change(picker, {
+        target: { value: '2024-06-05T12:34:56.789' },
+      });
+
+      expect(doc.get('date')?.currentType).to.eq('Date');
+      expect((doc.get('date')?.currentValue as Date).toISOString()).to.eq(
+        '2024-06-05T12:34:56.789Z'
+      );
     });
 
     it('should change element type on edit', function () {

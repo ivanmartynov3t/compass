@@ -15,6 +15,7 @@ import {
 import { connect } from 'react-redux';
 import { usePreferences } from 'compass-preferences-model/provider';
 import { changeZeroState } from '../modules/zero-state';
+import type { EditModeState } from '../modules/edit-mode';
 import type { RootState } from '../modules';
 import ValidationEditor from './validation-editor';
 import { SampleDocuments } from './sample-documents';
@@ -50,6 +51,10 @@ const READ_ONLY_WARNING = {
     'Schema validation for time-series collections is not supported.',
   collectionReadOnly: 'Schema validation for readonly views is not supported.',
   writeStateStoreReadOnly: 'This action is not available on a secondary node.',
+  constraintValidationActive:
+    'This collection uses the "constraint" validation level, which guarantees every document matches the validator. The rules cannot be changed while it is in effect.',
+  constraintValidationPrepared:
+    'This collection is prepared for an upgrade to the "constraint" validation level. The rules cannot be changed until the upgrade completes, or until the prepared state is cleared by running collMod with prepareConstraintValidationLevel: false.',
   oldServerReadOnly:
     'Compass no longer supports the visual rule builder for server versions below 3.2. To use the visual rule builder, please',
 };
@@ -75,12 +80,14 @@ type ValidationStatesProps = {
   generateValidationRules: () => void;
   clearRulesGenerationError: () => void;
   stopRulesGeneration: () => void;
-  editMode: {
-    collectionTimeSeries?: boolean;
-    collectionReadOnly?: boolean;
-    writeStateStoreReadOnly?: boolean;
-    oldServerReadOnly?: boolean;
-  };
+  editMode: Pick<
+    EditModeState,
+    | 'collectionTimeSeries'
+    | 'collectionReadOnly'
+    | 'writeStateStoreReadOnly'
+    | 'oldServerReadOnly'
+    | 'constraintValidation'
+  >;
 };
 
 function ValidationBanners({
@@ -110,6 +117,24 @@ function ValidationBanners({
     return (
       <WarningSummary
         warnings={READ_ONLY_WARNING.writeStateStoreReadOnly}
+        data-testid="collection-validation-warning"
+      />
+    );
+  }
+
+  if (editMode.constraintValidation === 'active') {
+    return (
+      <WarningSummary
+        warnings={READ_ONLY_WARNING.constraintValidationActive}
+        data-testid="collection-validation-warning"
+      />
+    );
+  }
+
+  if (editMode.constraintValidation === 'prepared') {
+    return (
+      <WarningSummary
+        warnings={READ_ONLY_WARNING.constraintValidationPrepared}
         data-testid="collection-validation-warning"
       />
     );
@@ -183,16 +208,14 @@ export function ValidationStates({
   stopRulesGeneration,
   editMode,
 }: ValidationStatesProps) {
-  const { readOnly, enableExportSchema } = usePreferences([
-    'readOnly',
-    'enableExportSchema',
-  ]);
+  const { readOnly } = usePreferences(['readOnly']);
 
   const isEditable =
     !editMode.collectionReadOnly &&
     !editMode.collectionTimeSeries &&
     !editMode.writeStateStoreReadOnly &&
     !editMode.oldServerReadOnly &&
+    editMode.constraintValidation === 'none' &&
     !readOnly;
 
   return (
@@ -219,23 +242,19 @@ export function ValidationStates({
               icon={ZeroGraphic}
               title="Create validation rules"
               subTitle={
-                enableExportSchema
-                  ? 'Generate rules via schema analysis from existing sample data or add them manually to enforce document structure during updates and inserts'
-                  : 'Create rules to enforce data structure of documents on updates and inserts.'
+                'Generate rules via schema analysis from existing sample data or add them manually to enforce document structure during updates and inserts'
               }
               callToAction={
                 <div className={zeroStateButtonsStyles}>
-                  {enableExportSchema && (
-                    <Button
-                      data-testid="generate-rules-button"
-                      disabled={!isEditable}
-                      onClick={generateValidationRules}
-                      variant={ButtonVariant.Primary}
-                      size="small"
-                    >
-                      Generate rules
-                    </Button>
-                  )}
+                  <Button
+                    data-testid="generate-rules-button"
+                    disabled={!isEditable}
+                    onClick={generateValidationRules}
+                    variant={ButtonVariant.Primary}
+                    size="small"
+                  >
+                    Generate rules
+                  </Button>
                   <Button
                     data-testid="add-rule-button"
                     disabled={!isEditable}

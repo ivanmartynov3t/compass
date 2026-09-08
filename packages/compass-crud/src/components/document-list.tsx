@@ -29,6 +29,7 @@ import {
   DOCUMENTS_STATUS_ERROR,
   DOCUMENTS_STATUS_FETCHING,
   DOCUMENTS_STATUS_FETCHED_INITIAL,
+  DOCUMENTS_STATUS_INITIAL,
 } from '../constants/documents-statuses';
 import type { CrudStore, BSONObject, DocumentView } from '../stores/crud-store';
 import { getToolbarSignal } from '../utils/toolbar-signal';
@@ -40,6 +41,16 @@ import {
 } from '@mongodb-js/compass-query-bar';
 import { usePreferences } from 'compass-preferences-model/provider';
 import { useAssistantActions } from '@mongodb-js/compass-assistant';
+import {
+  useDocumentEditsTelemetry,
+  type DocumentEditsMode,
+} from '../hooks/use-document-edits-telemetry';
+
+const DOCUMENT_EDITS_MODES = {
+  List: 'list',
+  JSON: 'json',
+  Table: 'table',
+} as const satisfies { [view in DocumentView]: DocumentEditsMode };
 
 // Table has its own scrollable container.
 const tableStyles = css({
@@ -84,8 +95,9 @@ export type DocumentListProps = {
         | 'isOpen'
         | 'error'
         | 'mode'
-        | 'jsonDoc'
+        | 'editorText'
         | 'isCommentNeeded'
+        | 'insertView'
       >
     >;
   bulkUpdate: Partial<BulkUpdateModalProps> &
@@ -110,8 +122,7 @@ export type DocumentListProps = {
     | 'closeInsertDocumentDialog'
     | 'insertDocument'
     | 'insertMany'
-    | 'updateJsonDoc'
-    | 'toggleInsertDocument'
+    | 'updateInsertDocText'
     | 'toggleInsertDocumentView'
     | 'version'
     | 'ns'
@@ -312,8 +323,7 @@ const DocumentList: React.FunctionComponent<DocumentListProps> = (props) => {
     closeInsertDocumentDialog,
     insertDocument,
     insertMany,
-    updateJsonDoc,
-    toggleInsertDocument,
+    updateInsertDocText,
     toggleInsertDocumentView,
     version,
     ns,
@@ -327,6 +337,8 @@ const DocumentList: React.FunctionComponent<DocumentListProps> = (props) => {
     docsPerPage,
     updateMaxDocumentsPerPage,
   } = props;
+
+  useDocumentEditsTelemetry(docs, DOCUMENT_EDITS_MODES[view]);
 
   const onOpenInsert = useCallback(
     (key: 'insert-document' | 'import-file') => {
@@ -385,13 +397,7 @@ const DocumentList: React.FunctionComponent<DocumentListProps> = (props) => {
     readOnly: preferencesReadOnly,
     readWrite: preferencesReadWrite,
     enableImportExport: isImportExportEnabled,
-    legacyUUIDDisplayEncoding,
-  } = usePreferences([
-    'readOnly',
-    'readWrite',
-    'enableImportExport',
-    'legacyUUIDDisplayEncoding',
-  ]);
+  } = usePreferences(['readOnly', 'readWrite', 'enableImportExport']);
 
   const isEditable =
     !preferencesReadOnly &&
@@ -403,7 +409,12 @@ const DocumentList: React.FunctionComponent<DocumentListProps> = (props) => {
 
   const isInitialFetch = status === DOCUMENTS_STATUS_FETCHED_INITIAL;
 
-  const isFetching = status === DOCUMENTS_STATUS_FETCHING && !debouncingLoad;
+  const isFirstFetch =
+    status === DOCUMENTS_STATUS_INITIAL ||
+    (status === DOCUMENTS_STATUS_FETCHING && isEmpty);
+
+  const isFetching =
+    isFirstFetch || (status === DOCUMENTS_STATUS_FETCHING && !debouncingLoad);
 
   const isError = status === DOCUMENTS_STATUS_ERROR;
 
@@ -516,7 +527,6 @@ const DocumentList: React.FunctionComponent<DocumentListProps> = (props) => {
               scrollTriggerRef={scrollTriggerRef}
               columnWidths={columnWidths}
               onColumnWidthChange={onColumnWidthChange}
-              legacyUUIDDisplayEncoding={legacyUUIDDisplayEncoding}
             />
           );
         }
@@ -539,7 +549,6 @@ const DocumentList: React.FunctionComponent<DocumentListProps> = (props) => {
       currentViewInitialScrollTop,
       columnWidths,
       onColumnWidthChange,
-      legacyUUIDDisplayEncoding,
     ]
   );
 
@@ -632,10 +641,8 @@ const DocumentList: React.FunctionComponent<DocumentListProps> = (props) => {
             closeInsertDocumentDialog={closeInsertDocumentDialog}
             insertDocument={insertDocument}
             insertMany={insertMany}
-            updateJsonDoc={updateJsonDoc}
-            toggleInsertDocument={toggleInsertDocument}
+            updateInsertDocText={updateInsertDocText}
             toggleInsertDocumentView={toggleInsertDocumentView}
-            jsonView
             version={version}
             ns={ns}
             updateComment={updateComment}

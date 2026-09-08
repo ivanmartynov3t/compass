@@ -34,6 +34,17 @@ variables:
     EVERGREEN_CREATED_AT: ${created_at}
     NODE_JS_VERSION: '24.15.0'
     NPM_VERSION: '11.16.0'
+    # Deprecated String::Value declaration in Electron 43 doesn't parse under
+    # GCC 12, breaking every native module on the Linux builders.
+    # We prepend /opt/devtools/bin (COMPASS-5150),
+    # which pins gcc 12.4.0 and shadows the distro compiler.
+    # macOS is on clang and Windows builds with MSBuild, which ignores CXXFLAGS.
+    # The -U makes V8_DEPRECATED expand to nothing; it only silences deprecation
+    # warnings in the addons' own sources, with no effect on the binaries.
+    # devtools-toolchain is already on gcc 13.4.0, which builds this fine, but it
+    # can't reach the builders until publishing is unblocked.
+    # TODO(DEVPROD-41681): remove CXXFLAGS once the builders are on GCC 13+.
+    CXXFLAGS: '-UV8_DEPRECATION_WARNINGS'
     # secrets
     HADRON_METRICS_INTERCOM_APP_ID: ${metrics_intercom_app_id}
     HADRON_METRICS_SEGMENT_API_KEY: ${metrics_segment_api_key}
@@ -64,7 +75,6 @@ variables:
     E2E_TESTS_ATLAS_READANYDATABASE_STRING: ${e2e_tests_atlas_readanydatabase_string}
     E2E_TESTS_ATLAS_CUSTOMROLE_STRING: ${e2e_tests_atlas_customrole_string}
     E2E_TESTS_ATLAS_SPECIFICPERMISSION_STRING: ${e2e_tests_atlas_specificpermission_string}
-    E2E_TESTS_ATLAS_CS_WITHOUT_SEARCH: ${e2e_tests_atlas_cs_without_search}
     E2E_TESTS_ATLAS_CS_WITH_SEARCH: ${e2e_tests_atlas_cs_with_search}
     ATLAS_CLOUD_TEST_UTILS: ${atlas_cloud_test_utils}
 
@@ -196,6 +206,33 @@ functions:
           set -e
           eval $(.evergreen/print-compass-env.sh)
 
+          # node-gyp needs a Python with the ctypes module to configure native
+          # modules, and on Windows it resolves one from PATH. MinGW's Python
+          # comes first on some distros and is built without ctypes, which fails
+          # every native build, so point node-gyp at an interpreter explicitly.
+          # Windows distros keep Python either in the toolchain directory or at
+          # the root, depending on how it was installed.
+          case "$(uname -s)" in
+            CYGWIN*|MINGW*|MSYS*)
+              python_exe=""
+              # C:\python\Current is the version the distro's toolchain selected;
+              # otherwise prefer the newest available.
+              for candidate in /cygdrive/c/python/Current/python.exe \
+                               $(ls -d /cygdrive/c/python/Python3*/python.exe /cygdrive/c/Python3*/python.exe 2>/dev/null | sort -Vr); do
+                if [ -x "$candidate" ] && "$candidate" -c 'import ctypes' >/dev/null 2>&1; then
+                  python_exe="$candidate"
+                  break
+                fi
+              done
+              if [ -n "$python_exe" ]; then
+                export npm_config_python="$(cygpath -w "$python_exe")"
+                echo "Using Python at $npm_config_python for node-gyp"
+              else
+                echo "WARNING: no Python with ctypes found, native module builds will likely fail"
+              fi
+              ;;
+          esac
+
           echo "Installing Compass dependencies with the following npm configuration"
           npm config ls -l
           echo "(if npm fails, debug.log will be uploaded to S3)"
@@ -214,14 +251,6 @@ functions:
         script: |
           set -e
           eval $(.evergreen/print-compass-env.sh)
-
-          # Pre-built binaries for keytar do not support older RHEL versions.
-          # Since we have started importing keytar from top-level scripts in packages,
-          # re-built keytar before the bootstrap process so that it is always usable.
-          if [[ "$IS_RHEL" == "true" ]]; then
-            echo "Rebuilding packages for rhel"
-            npm run node-rebuild
-          fi
 
           # Prepare workspaces in provided scope
           npx lerna run bootstrap \
@@ -412,7 +441,6 @@ functions:
       params:
         working_dir: src
         shell: bash
-        include_expansions_in_env: [DEVELOPER_DIR]
         env:
           <<: *compass-env
           DEBUG: ${debug}
@@ -429,6 +457,26 @@ functions:
           cd packages/compass && npm run prepackage-compass
     - command: ec2.assume_role
       retry_on_failure: true
+      display_name: Assume IAM role with permissions to pull SilkBomb image from DevProd Platforms ECR
+      params:
+        role_arn: ${devprod_platforms_ecr_readonly_role_arn}
+    - command: shell.exec
+      retry_on_failure: true
+      params:
+        include_expansions_in_env:
+          [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN]
+        script: |
+          set -e
+          ecr_login_password=$(aws ecr get-login-password --region us-east-1)
+          cat <<EOL > ecr_login_password.yml
+          ECR_LOGIN_PASSWORD: $ecr_login_password
+          EOL
+    - command: expansions.update
+      retry_on_failure: true
+      params:
+        file: ecr_login_password.yml
+    - command: ec2.assume_role
+      retry_on_failure: true
       display_name: Assume IAM role with permissions to pull Kondukto API token
       params:
         role_arn: ${kondukto_role_arn}
@@ -438,17 +486,11 @@ functions:
         working_dir: src
         shell: bash
         include_expansions_in_env:
-          [
-            AWS_ACCESS_KEY_ID,
-            AWS_SECRET_ACCESS_KEY,
-            AWS_SESSION_TOKEN,
-            DEVELOPER_DIR,
-          ]
+          [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN]
         env:
           <<: *compass-env
           npm_config_loglevel: ${npm_loglevel}
-          ARTIFACTORY_USERNAME: ${artifactory_username}
-          ARTIFACTORY_PASSWORD: ${artifactory_password}
+          ECR_LOGIN_PASSWORD: ${ECR_LOGIN_PASSWORD}
           SIGNING_SERVER_HOSTNAME: ${SIGNING_SERVER_HOSTNAME}
           SIGNING_SERVER_PRIVATE_KEY: ${SIGNING_SERVER_PRIVATE_KEY}
           SIGNING_SERVER_PRIVATE_KEY_CYGPATH: ${SIGNING_SERVER_PRIVATE_KEY_CYGPATH}
@@ -460,12 +502,18 @@ functions:
           set -e
           eval $(.evergreen/print-compass-env.sh)
           bash ".evergreen/retry-with-backoff.sh" .evergreen/create-sbom.sh
+    - command: ec2.assume_role
+      retry_on_failure: true
+      display_name: Assume IAM role with permissions to pull Garasign images from DevProd Platforms ECR
+      params:
+        role_arn: ${devprod_platforms_ecr_readonly_role_arn}
     - command: shell.exec
       retry_on_failure: true
       params:
         working_dir: src
         shell: bash
-        include_expansions_in_env: [DEVELOPER_DIR]
+        include_expansions_in_env:
+          [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN]
         env:
           <<: *compass-env
           DEBUG: ${debug}
@@ -480,8 +528,6 @@ functions:
           # linux / windows signing secrets
           GARASIGN_USERNAME: ${garasign_username}
           GARASIGN_PASSWORD: ${garasign_password}
-          ARTIFACTORY_USERNAME: ${artifactory_username}
-          ARTIFACTORY_PASSWORD: ${artifactory_password}
           SIGNING_SERVER_HOSTNAME: ${SIGNING_SERVER_HOSTNAME}
           SIGNING_SERVER_PRIVATE_KEY: ${SIGNING_SERVER_PRIVATE_KEY}
           SIGNING_SERVER_PRIVATE_KEY_CYGPATH: ${SIGNING_SERVER_PRIVATE_KEY_CYGPATH}
@@ -497,6 +543,7 @@ functions:
           set -e
           # Load environment variables
           eval $(.evergreen/print-compass-env.sh)
+          export ECR_LOGIN_PASSWORD=$(aws ecr get-login-password --region us-east-1)
           .evergreen/compass_package.sh
 
   get_first_party_dependency_list:
@@ -671,8 +718,7 @@ functions:
         working_dir: src
         shell: bash
         env:
-          <<: *compass-env
-          <<: *compass-e2e-secrets
+          <<: [*compass-env, *compass-e2e-secrets]
           DEBUG: ${debug|}
           MONGODB_VERSION: ${mongodb_version|}
           MONGODB_RUNNER_VERSION: ${mongodb_version|}
@@ -701,8 +747,7 @@ functions:
         working_dir: src
         shell: bash
         env:
-          <<: *compass-env
-          <<: *compass-e2e-secrets
+          <<: [*compass-env, *compass-e2e-secrets]
           COMPASS_APP_PATH_ORIGINAL: ${appPath}
           COMPASS_APP_NAME: ${packagerOptions.name}
           DEBUG: ${debug|}
@@ -710,6 +755,7 @@ functions:
           MONGODB_RUNNER_VERSION: ${mongodb_version|}
           COMPASS_E2E_TEST_GROUPS: ${e2e_test_groups}
           COMPASS_E2E_TEST_GROUP: ${e2e_test_group}
+          PACKAGED_APP_TEST_ARGS: '${packaged_app_test_args|}'
         script: |
           set -e
           # Load environment variables
@@ -727,7 +773,7 @@ functions:
             export COMPASS_E2E_DISABLE_CLIPBOARD_USAGE="true"
           fi
 
-          npm run --unsafe-perm --workspace compass-e2e-tests test-packaged-ci
+          npm run --unsafe-perm --workspace compass-e2e-tests test-packaged-ci -- $PACKAGED_APP_TEST_ARGS
 
   smoketest-on-github-actions:
     - command: github.generate_token
@@ -782,8 +828,7 @@ functions:
         working_dir: src
         shell: bash
         env:
-          <<: *compass-env
-          <<: *compass-e2e-secrets
+          <<: [*compass-env, *compass-e2e-secrets]
           COMPASS_APP_PATH_ORIGINAL: ${appPath}
           COMPASS_APP_NAME: ${packagerOptions.name}
           DEBUG: ${debug|}
@@ -806,13 +851,14 @@ functions:
         working_dir: src
         shell: bash
         env:
-          <<: *compass-env
-          <<: *compass-e2e-secrets
+          <<: [*compass-env, *compass-e2e-secrets]
           DEBUG: ${debug|}
           COMPASS_E2E_ATLAS_CLOUD_ENVIRONMENT: '${compass_web_publish_environment}'
           # CCS connection / op running time is slower than default timeouts
           COMPASS_E2E_MOCHA_TIMEOUT: '1440000' # 24 min
           COMPASS_E2E_WEBDRIVER_WAITFOR_TIMEOUT: '960000' # 16 min
+          COMPASS_E2E_TEST_GROUPS: ${e2e_test_groups|1}
+          COMPASS_E2E_TEST_GROUP: ${e2e_test_group|1}
           ATLAS_CLOUD_TEST_ARGS: '${atlas_cloud_test_args|}'
         script: |
           set -e
@@ -831,8 +877,7 @@ functions:
         working_dir: src
         shell: bash
         env:
-          <<: *compass-env
-          <<: *compass-e2e-secrets
+          <<: [*compass-env, *compass-e2e-secrets]
           COMPASS_SKIP_KERBEROS_TESTS: 'true'
           COMPASS_RUN_DOCKER_TESTS: 'true'
           DEBUG: ${debug}

@@ -291,6 +291,26 @@ describe('queryBarReducer', function () {
       );
     });
 
+    it('should not touch the last applied query for a non-update query', function () {
+      store.dispatch(applyFromHistory({ filter: { _id: 2 } }));
+
+      expect(store.getState().queryBar.lastAppliedQuery).to.deep.eq({
+        source: null,
+        query: {},
+      });
+    });
+
+    it('should record the query as the last applied crud query for an update query', function () {
+      store.dispatch(
+        applyFromHistory({ filter: { _id: 2 }, update: { $set: { a: 1 } } })
+      );
+
+      expect(store.getState().queryBar.lastAppliedQuery.source).to.eq('crud');
+      expect(store.getState().queryBar.lastAppliedQuery.query.crud)
+        .to.have.property('filter')
+        .deep.eq({ _id: 2 });
+    });
+
     it('should auto expand when the query contains extra options', function () {
       const queryNoExtraOptions = {
         filter: { _id: 2 },
@@ -355,6 +375,19 @@ describe('queryBarReducer', function () {
           },
         }
       );
+    });
+  });
+
+  describe('isInterpretLoading', function () {
+    it('sets isInterpretLoading to true on InterpretStarted action', function () {
+      store.dispatch({ type: QueryBarActions.InterpretStarted });
+      expect(store.getState().queryBar.isInterpretLoading).to.be.true;
+    });
+
+    it('sets isInterpretLoading to false on InterpretFinished action', function () {
+      store.dispatch({ type: QueryBarActions.InterpretStarted });
+      store.dispatch({ type: QueryBarActions.InterpretFinished });
+      expect(store.getState().queryBar.isInterpretLoading).to.be.false;
     });
   });
 });

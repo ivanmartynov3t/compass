@@ -29,5 +29,10 @@ export type {
   MockDataSchemaToolOutput,
 } from './atlas-ai-service';
 
-export { READ_ONLY_DATABASE_TOOLS, AVAILABLE_TOOLS } from './available-tools';
+export {
+  READ_ONLY_DATABASE_TOOLS,
+  getAvailableTools,
+  doesToolUseConnection,
+  isReadOnlyTool,
+} from './available-tools';
 export { AI_MODEL_CHAT_VERSION, AI_MODEL_SLIM_VERSION } from './model-version';

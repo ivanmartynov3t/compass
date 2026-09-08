@@ -242,6 +242,11 @@ describe('MongoDB Assistant (with mocked backend)', function () {
 
     describe('entry points', function () {
       it('should display opt-in modal for connection error entry point', async function () {
+        if (isTestingWebAtlasCloud()) {
+          // We don't show connection debugging on Atlas web.
+          return this.skip();
+        }
+
         await browser.connectWithConnectionString(
           'mongodb-invalid://localhost:27017',
           { connectionStatus: 'failure' }
@@ -502,6 +507,11 @@ describe('MongoDB Assistant (with mocked backend)', function () {
 
       describe('error message entry point', function () {
         before(function () {
+          if (isTestingWebAtlasCloud()) {
+            // We don't show connection debugging on Atlas web.
+            return this.skip();
+          }
+
           mockAssistantServer.setResponse({
             status: 200,
             body: 'You should review the connection string.',
@@ -589,13 +599,24 @@ async function useExplainPlanEntryPoint(
   browser: CompassBrowser,
   { waitForMessages = true } = {}
 ) {
-  await browser.clickVisible(Selectors.AggregationExplainButton);
+  await browser.$(Selectors.AggregationExplainButton).waitForDisplayed();
+  const isDropdownVariant = await browser
+    .$(Selectors.AggregationExplainDropdownButton)
+    .isExisting();
 
-  await browser.clickVisible(Selectors.ExplainPlanInterpretButton);
+  if (isDropdownVariant) {
+    await browser.clickVisible(Selectors.AggregationExplainDropdownButton);
+    await browser.clickVisible(
+      Selectors.AggregationExplainDropdownInterpretAction
+    );
+  } else {
+    await browser.clickVisible(Selectors.AggregationExplainLegacyButton);
+    await browser.clickVisible(Selectors.ExplainPlanInterpretButton);
 
-  await browser.waitForOpenModal(Selectors.AggregationExplainModal, {
-    reverse: true,
-  });
+    await browser.waitForOpenModal(Selectors.AggregationExplainModal, {
+      reverse: true,
+    });
+  }
 
   if (waitForMessages) {
     await browser.$(Selectors.AssistantChatMessages).waitForDisplayed();

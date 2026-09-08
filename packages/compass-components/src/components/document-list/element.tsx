@@ -24,7 +24,7 @@ import VisibleFieldsToggle from './visible-field-toggle';
 import { hasDistinctValue } from 'mongodb-query-util';
 import { useContextMenuGroups } from '../context-menu';
 import { useSyncStateOnPropChange } from '../../hooks/use-sync-state-on-prop-change';
-import { useLegacyUUIDDisplayContext } from './legacy-uuid-format-context';
+import { useBSONDisplayOptions } from './bson-display-options-context';
 
 function useElementEditor(
   el: HadronElementType,
@@ -38,8 +38,8 @@ function useElementEditor(
 
 function useHadronElement(el: HadronElementType) {
   const forceUpdate = useForceUpdate();
-  const legacyUUIDEncoding = useLegacyUUIDDisplayContext();
-  const displayType = getDisplayType(el, legacyUUIDEncoding);
+  const { legacyUUIDDisplayEncoding } = useBSONDisplayOptions();
+  const displayType = getDisplayType(el, legacyUUIDDisplayEncoding);
   const editor = useElementEditor(el, displayType);
   // NB: Duplicate key state is kept local to the component and not derived on
   // every change so that only the changed key is highlighed as duplicate
@@ -110,6 +110,18 @@ function useHadronElement(el: HadronElementType) {
 
   const isValid = el.isCurrentTypeValid();
 
+  const originalValue =
+    el.currentType === 'Array'
+      ? [...(el.elements || [])]
+      : el.currentType === 'Object'
+      ? Object.fromEntries(
+          Array.from(el.elements || []).map((e) => [
+            e.currentKey,
+            e.currentValue,
+          ])
+        )
+      : el.currentValue;
+
   return {
     id: el.uuid,
     key: {
@@ -129,8 +141,7 @@ function useHadronElement(el: HadronElementType) {
     },
     value: {
       value: editor.value(),
-      originalValue:
-        el.currentType === 'Array' ? [...(el.elements || [])] : el.currentValue,
+      originalValue,
       change(newVal: string) {
         editor.edit(newVal);
       },
@@ -157,6 +168,7 @@ function useHadronElement(el: HadronElementType) {
     visibleChildren: el.getVisibleElements(),
     level: el.level,
     parentType: el.parent?.currentType,
+    modified: el.isModified(),
     removed: el.isRemoved(),
     internal: el.isInternalField(),
     expanded: el.expanded,
@@ -208,6 +220,8 @@ const elementRemovedLightMode = css({
   },
 });
 
+const elementModifiedLightMode = elementInvalidLightMode;
+
 const elementInvalidDarkMode = css({
   backgroundColor: palette.yellow.dark3,
   '&:hover': {
@@ -221,6 +235,8 @@ const elementRemovedDarkMode = css({
     backgroundColor: palette.red.dark2,
   },
 });
+
+const elementModifiedDarkMode = elementInvalidDarkMode;
 
 const elementActions = css({
   flex: 'none',
@@ -334,6 +350,15 @@ const actionsVisible = css({
     {
       display: 'block',
     },
+  // Keep the actions visible while a menu opened from them is expanded. The
+  // add-field menu's trigger sets `aria-expanded="true"` while open; otherwise
+  // the gutter is hidden as soon as the row loses `:hover` (and the menu's focus
+  // is not `:focus-within` the row), which collapses the trigger to 0x0 and
+  // makes leafygreen's popover positioning lose its reference — throwing the
+  // open menu offscreen so clicks on its items miss.
+  '&:has([aria-expanded="true"])': {
+    display: 'block',
+  },
 });
 
 const lineNumberCountHidden = css({
@@ -451,6 +476,7 @@ export const HadronElement: React.FunctionComponent<{
     visibleChildren,
     level,
     parentType,
+    modified,
     removed,
     internal,
     expanded,
@@ -493,10 +519,16 @@ export const HadronElement: React.FunctionComponent<{
               }
             : undefined,
           {
+            label: 'Copy value',
+            onAction: () => {
+              void navigator.clipboard.writeText(element.toShellSyntax());
+            },
+          },
+          {
             label: 'Copy field & value',
             onAction: () => {
               void navigator.clipboard.writeText(
-                `${key.value}: ${element.toEJSON()}`
+                `${key.value}: ${element.toShellSyntax()}`
               );
             },
           },
@@ -571,6 +603,9 @@ export const HadronElement: React.FunctionComponent<{
     className: cx(
       hadronElement,
       darkMode ? hadronElementDarkMode : hadronElementLightMode,
+      modified &&
+        !expanded &&
+        (darkMode ? elementModifiedDarkMode : elementModifiedLightMode),
       removed ? elementRemoved : editingEnabled && !isValid && elementInvalid
     ),
     onClick: toggleExpanded,

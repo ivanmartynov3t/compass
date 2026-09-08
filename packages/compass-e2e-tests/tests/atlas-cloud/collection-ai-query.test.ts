@@ -10,15 +10,41 @@ import {
 import type { Compass } from '../../helpers/compass.ts';
 import * as Selectors from '../../helpers/selectors.ts';
 import { createNumbersCollection } from '../../helpers/mongo-clients.ts';
-import { isTestingWebAtlasCloud } from '../../helpers/test-runner-context.ts';
+import {
+  isTestingWeb,
+  isTestingWebAtlasCloud,
+} from '../../helpers/test-runner-context.ts';
 import { switchPipelineMode } from '../../helpers/commands/switch-pipeline-mode.ts';
+
+// Whether the generate query / generate aggregation input was left open is
+// persisted, make sure every test starts with it closed.
+const AI_INPUT_VISIBLE_STORAGE_KEYS = [
+  'compass_query_bar_ai_input_visible',
+  'compass_aggregations_ai_input_visible',
+];
+
+async function resetAIInputVisibleState(browser: CompassBrowser) {
+  await browser.execute((keys: string[]) => {
+    for (const key of keys) {
+      // eslint-disable-next-line no-restricted-globals
+      localStorage.removeItem(key);
+    }
+  }, AI_INPUT_VISIBLE_STORAGE_KEYS);
+}
 
 describe('Collection ai query (with real Cloud backend)', function () {
   let compass: Compass;
   let browser: CompassBrowser;
 
   before(function () {
-    if (!isTestingWebAtlasCloud()) {
+    // Skipping tests for environments where real backend is not available
+    if (
+      // Knowledge API doesn't allow requests from localhost
+      isTestingWeb() ||
+      // Knowledge API doesn't allow requests from Evergreen in non-prod
+      // envioronments that we're using for WebAtlasCloud tests
+      isTestingWebAtlasCloud()
+    ) {
       this.skip();
     }
   });
@@ -36,6 +62,7 @@ describe('Collection ai query (with real Cloud backend)', function () {
 
       await createNumbersCollection();
       await browser.connectToDefaults();
+      await resetAIInputVisibleState(browser);
       await browser.navigateToCollectionTab(
         getDefaultConnectionNames(0),
         'test',

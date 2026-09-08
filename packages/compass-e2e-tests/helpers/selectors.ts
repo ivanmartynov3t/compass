@@ -23,6 +23,9 @@ export const ArtificialIntelligenceSettingsContent = `${SettingsModal} [data-tes
 export const SettingsInputElement = (settingName: string): string => {
   return `${SettingsModal} [data-testid="${settingName}"]`;
 };
+export const SettingsComboboxInputElement = (settingName: string): string => {
+  return `${SettingsInputElement(settingName)} input`;
+};
 
 // LG Modals
 export const LGModal = '[data-lgid="lg-modal"]';
@@ -613,12 +616,15 @@ export const CloneDocumentButton = '[data-testid="clone-document-button"]';
 export const DeleteDocumentButton = '[data-testid="remove-document-button"]';
 export const DocumentFooter = '[data-testid="document-footer"]';
 export const DocumentFooterMessage = '[data-testid="document-footer-message"]';
+export const DocumentFooterFixSafeIntegerLink =
+  '[data-testid="fix-safe-integer-violations-button"]';
 export const DocumentFooterErrorDetailsButton =
   '[data-testid="edit-actions-footer-error-details-button"]';
 export const UpdateDocumentButton = `${DocumentFooter} [data-testid="update-button"]`;
 export const ConfirmDeleteDocumentButton = `${DocumentFooter} [data-testid="delete-button"]`;
 export const JSONDocumentCard = '[data-testid="editable-json"]';
 export const JSONEditDocumentButton = `${JSONDocumentCard} [data-testid="editor-action-Edit"]`;
+export const JSONCopyDocumentButton = `${JSONDocumentCard} [data-testid="editor-action-Copy"]`;
 export const ShowMoreFieldsButton = '[data-testid="show-more-fields-button"]';
 export const BulkActionsButton =
   '[data-testid="crud-bulk-actions-show-actions"]';
@@ -635,8 +641,18 @@ export const InsertDialog = '[data-testid="insert-document-modal"]';
 export const InsertDialogErrorMessage =
   '[data-testid="insert-document-banner"][data-variant="danger"]';
 export const InsertDialogErrorDetailsBtn =
-  'button[data-testid="insert-document-error-details-button"]';
-export const InsertJSONEditor = '[data-testid="insert-document-json-editor"]';
+  'button[data-testid="insert-document-error-action-button"]';
+export const InsertDocumentEditor = '[data-testid="insert-document-editor"]';
+export const InsertDialogJSONView =
+  '[data-testid="insert-document-dialog-view-json"]';
+export const InsertDialogShellView =
+  '[data-testid="insert-document-dialog-view-shell"]';
+export const InsertDialogListView =
+  '[data-testid="insert-document-dialog-view-list"]';
+export const InsertDialogEJSONConversionBanner =
+  '[data-testid="insert-document-ejson-conversion-banner"]';
+export const InsertDialogEJSONConversionBtn =
+  'button[data-testid="insert-document-ejson-conversion-button"]';
 export const InsertConfirm =
   '[data-testid="insert-document-modal"] [data-testid="submit-button"]';
 export const InsertCancel =
@@ -743,6 +759,7 @@ export const HadronDocumentTypeEditor =
   '[data-testid="hadron-document-type-editor"]';
 export const HadronDocumentValue =
   '[data-testid="hadron-document-element-value"]';
+export const DateWithTimezoneHint = '[data-testid="date-with-timezone-hint"]';
 export const HadronDocumentValueEditor =
   '[data-testid="hadron-document-value-editor"]';
 export const HadronDocumentClickableValue =
@@ -761,6 +778,17 @@ export const HadronDocumentRemoveElement =
   '[data-testid="hadron-document-remove"]';
 export const HadronDocumentElementDecryptedIcon =
   '[data-testid="hadron-document-element-decrypted-icon"]';
+export const hadronDocumentFieldRow = (name: string) => {
+  return `[data-field="${name}"]${HadronDocumentElement}`;
+};
+export const hadronDocumentAddFieldButton = (name: string) => {
+  return `${hadronDocumentFieldRow(
+    name
+  )} ${HadronDocumentAddElementMenuButton}`;
+};
+export const hadronDocumentExpandRowButton = (name: string) => {
+  return `${hadronDocumentFieldRow(name)} [aria-label="Expand field items"]`;
+};
 
 // Document list view
 
@@ -895,7 +923,11 @@ export const AggregationSavedPipelineCardDeleteButton = (
 export const AggregationExplainLegacyButton =
   '[data-testid="pipeline-toolbar-explain-aggregation-button"]';
 export const AggregationExplainDropdownButton =
-  '[data-testid="pipeline-toolbar-explain-aggregation-dropdown-button"]';
+  '[data-testid="pipeline-toolbar-explain-aggregation-dropdown-button-show-actions"]';
+export const AggregationExplainDropdownVisualTreeAction =
+  '[data-testid="pipeline-toolbar-explain-aggregation-dropdown-button-visual-tree-action"]';
+export const AggregationExplainDropdownInterpretAction =
+  '[data-testid="pipeline-toolbar-explain-aggregation-dropdown-button-interpret-action"]';
 export const AggregationExplainButton = `${AggregationExplainLegacyButton}, ${AggregationExplainDropdownButton}`;
 export const AggregationExplainModal = '[data-testid="explain-plan-modal"]';
 export const ExplainPlanInterpretButton =
@@ -1068,7 +1100,11 @@ export const SchemaFieldTypeList = '[data-testid="schema-field-type-list"]';
 export const ExecuteExplainLegacyButton =
   '[data-testid="query-bar-explain-button"]';
 export const ExecuteExplainDropdownButton =
-  '[data-testid="query-bar-explain-dropdown-button"]';
+  '[data-testid="query-bar-explain-dropdown-button-show-actions"]';
+export const ExecuteExplainDropdownVisualTreeAction =
+  '[data-testid="query-bar-explain-dropdown-button-visual-tree-action"]';
+export const ExecuteExplainDropdownInterpretAction =
+  '[data-testid="query-bar-explain-dropdown-button-interpret-action"]';
 export const ExecuteExplainButton = `${ExecuteExplainLegacyButton}, ${ExecuteExplainDropdownButton}`;
 export const ExplainLoader = '[data-testid="explain-plan-loading"]';
 export const ExplainSummary = '[data-testid="explain-plan-summary"]';
@@ -1179,6 +1215,8 @@ export const AddRuleButton = '[data-testid="add-rule-button"]';
 export const EnableEditValidationButton =
   '[data-testid="enable-edit-validation-button"]';
 export const ValidationEditor = '[data-testid="validation-editor"]';
+export const ValidationWarningBanner =
+  '[data-testid="collection-validation-warning"]';
 export const ValidationActionMessage =
   '[data-testid="validation-action-message"]';
 export const UpdateValidationButton =
@@ -1556,3 +1594,8 @@ export const AssistantConfirmClearChatModalConfirmButton = `${AssistantConfirmCl
 export const AIOptInModal = '[data-testid="ai-optin-modal"]';
 export const AIOptInModalAcceptButton = 'button=Use AI Features';
 export const AIOptInModalDeclineLink = 'span=Not now';
+
+// Codemirror
+export const CodemirrorLintErrorIcon = '.cm-lint-marker.cm-lint-marker-error';
+export const CodemirrorLintTooltip = '.cm-tooltip-lint';
+export const CodemirrorLintAction = '.cm-diagnosticAction';

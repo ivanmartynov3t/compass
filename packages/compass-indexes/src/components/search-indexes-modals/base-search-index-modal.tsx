@@ -20,6 +20,7 @@ import {
   RadioBox,
   rafraf,
   SpinLoader,
+  Tooltip,
   useSyncStateOnPropChange,
 } from '@mongodb-js/compass-components';
 import type { Annotation } from '@mongodb-js/compass-editor';
@@ -47,8 +48,10 @@ import {
   type TrackFunction,
 } from '@mongodb-js/compass-telemetry/provider';
 import { useConnectionInfoRef } from '@mongodb-js/compass-connections/provider';
+import { isEqual } from 'lodash';
 import { parseShellBSON } from '../../utils/parse-shell-bson';
 import { isAutoEmbedIndex } from '../../utils/is-auto-embed-index';
+import { AUTO_EMBED_EDIT_COST_WARNING } from '../../utils/auto-embed-messaging';
 
 const bodyStyles = css({
   display: 'flex',
@@ -104,6 +107,18 @@ type ParsingError = {
   pos: number | undefined;
 };
 
+// Compares two index definitions by their parsed value rather than their raw
+// text, so that formatting-only edits (whitespace, key ordering) are treated as
+// unchanged. This mirrors the isEqual no-op guard in the updateIndex thunk so
+// that the Save button is disabled exactly when a submit would be a no-op.
+function areIndexDefinitionsEqual(a: string, b: string): boolean {
+  try {
+    return isEqual(parseShellBSON(a), parseShellBSON(b));
+  } catch {
+    return false;
+  }
+}
+
 type BaseSearchIndexModalProps = {
   namespace: string;
   mode: 'create' | 'update';
@@ -120,6 +135,7 @@ type BaseSearchIndexModalProps = {
     definition: Document;
   }) => void;
   onClose: () => void;
+  onClearError: () => void;
 };
 
 type SearchIndexType = 'search' | 'vectorSearch';
@@ -139,6 +155,11 @@ type SearchIndexEditorState = {
   indexType: SearchIndexType;
   indexName: string;
   indexDefinition: string;
+  // Snapshot of the definition captured when the modal opens. Used to detect
+  // whether the user has changed the definition. Unlike the initialIndexDefinition
+  // prop (which is recomputed from the polled store and can drift while the modal
+  // is open), this stays fixed for the lifetime of an open modal.
+  initialIndexDefinitionSnapshot: string;
   parsingError: ParsingError | undefined;
   vectorTemplateChoice: VectorIndexTemplateChoice;
 };
@@ -157,6 +178,7 @@ export const BaseSearchIndexModal: React.FunctionComponent<
   error,
   onSubmit,
   onClose,
+  onClearError,
 }) => {
   const initialIndexType =
     _initialIndexType === 'search' || _initialIndexType === 'vectorSearch'
@@ -164,9 +186,11 @@ export const BaseSearchIndexModal: React.FunctionComponent<
       : 'search';
   const editorRef = useRef<EditorRef>(null);
   const connectionInfoRef = useConnectionInfoRef();
-  const { enableAutoEmbeddingPublicPreview } = usePreferences([
-    'enableAutoEmbeddingPublicPreview',
-  ]);
+  const { enableAutoEmbeddingPublicPreview, enableAutoEmbeddingGaRelease } =
+    usePreferences([
+      'enableAutoEmbeddingPublicPreview',
+      'enableAutoEmbeddingGaRelease',
+    ]);
   const defaultVectorTemplateChoice: VectorIndexTemplateChoice =
     enableAutoEmbeddingPublicPreview ? 'autoEmbed' : 'bringYourOwn';
   const [
@@ -174,6 +198,7 @@ export const BaseSearchIndexModal: React.FunctionComponent<
       indexType: searchIndexType,
       indexName,
       indexDefinition,
+      initialIndexDefinitionSnapshot,
       parsingError,
       vectorTemplateChoice,
     },
@@ -183,6 +208,7 @@ export const BaseSearchIndexModal: React.FunctionComponent<
       indexType: initialIndexType,
       indexName: initialIndexName,
       indexDefinition: initialIndexDefinition,
+      initialIndexDefinitionSnapshot: initialIndexDefinition,
       parsingError: undefined,
       vectorTemplateChoice: defaultVectorTemplateChoice,
     };
@@ -241,6 +267,7 @@ export const BaseSearchIndexModal: React.FunctionComponent<
         indexType: initialIndexType,
         indexName: initialIndexName,
         indexDefinition: initialIndexDefinition,
+        initialIndexDefinitionSnapshot: initialIndexDefinition,
         parsingError: undefined,
         vectorTemplateChoice: defaultVectorTemplateChoice,
       });
@@ -256,6 +283,12 @@ export const BaseSearchIndexModal: React.FunctionComponent<
       } catch (ex) {
         parsingError = ex as ParsingError;
       }
+
+      // Editing the definition invalidates any error from a previous submit.
+      if (error) {
+        onClearError();
+      }
+
       setSearchIndexEditorState((prevState) => {
         return {
           ...prevState,
@@ -264,7 +297,7 @@ export const BaseSearchIndexModal: React.FunctionComponent<
         };
       });
     },
-    []
+    [error, onClearError]
   );
 
   const onSubmitIndex = useCallback(() => {
@@ -362,8 +395,12 @@ export const BaseSearchIndexModal: React.FunctionComponent<
     return createSearchIndexAutocompleter({ fields });
   }, [fields]);
 
+  // The restriction banner's copy is scoped to Public Preview. The GA flag retires it.
+  const isAutoEmbedPreviewMessagingActive =
+    enableAutoEmbeddingPublicPreview && !enableAutoEmbeddingGaRelease;
+
   const showAutoEmbedEditRestrictedBanner = useMemo(() => {
-    if (!enableAutoEmbeddingPublicPreview) {
+    if (!isAutoEmbedPreviewMessagingActive) {
       return false;
     }
     try {
@@ -372,10 +409,36 @@ export const BaseSearchIndexModal: React.FunctionComponent<
     } catch {
       return false;
     }
-  }, [mode, enableAutoEmbeddingPublicPreview, initialIndexDefinition]);
+  }, [isAutoEmbedPreviewMessagingActive, initialIndexDefinition]);
+
+  // At GA the edit is allowed but re-triggers embedding, so warn about cost instead.
+  const showAutoEmbedEditCostBanner = useMemo(() => {
+    if (!enableAutoEmbeddingGaRelease || mode !== 'update') {
+      return false;
+    }
+    try {
+      const latestDefinition = parseShellBSON(initialIndexDefinition);
+      return isAutoEmbedIndex({ latestDefinition });
+    } catch {
+      return false;
+    }
+  }, [enableAutoEmbeddingGaRelease, mode, initialIndexDefinition]);
 
   const isEditingVectorSearchIndex =
     mode === 'update' && initialIndexType === 'vectorSearch';
+
+  // When editing an existing index, the definition is the only editable field,
+  // so we keep the Save button disabled until it is actually modified. We compare
+  // against the snapshot taken when the modal opened (not the live prop, which can
+  // drift from background polling) and by parsed value (so formatting-only edits
+  // don't count as a change). This avoids no-op submits that would otherwise be
+  // silently dropped by the updateIndex thunk.
+  const isIndexDefinitionUnchanged = useMemo(() => {
+    return (
+      mode === 'update' &&
+      areIndexDefinitionsEqual(indexDefinition, initialIndexDefinitionSnapshot)
+    );
+  }, [mode, indexDefinition, initialIndexDefinitionSnapshot]);
 
   return (
     <Modal
@@ -532,11 +595,10 @@ export const BaseSearchIndexModal: React.FunctionComponent<
         </div>
         {parsingError && <WarningSummary warnings={parsingError.message} />}
         {!parsingError && error && <ErrorSummary errors={error} />}
-        {mode === 'update' && (
+        {mode === 'update' && !showAutoEmbedEditCostBanner && (
           <Banner>
-            Note: Updating the index may slow down your device temporarily due
-            to resource usage. Save indexes only with changes to avoid
-            reindexing.
+            Note: Updating the index definition will consume additional
+            resources on your cluster.
           </Banner>
         )}
         {showAutoEmbedEditRestrictedBanner && (
@@ -547,21 +609,33 @@ export const BaseSearchIndexModal: React.FunctionComponent<
             autoEmbed configuration, create a new index.
           </Banner>
         )}
+        {showAutoEmbedEditCostBanner && (
+          <Banner data-testid="auto-embed-edit-cost-banner">
+            {AUTO_EMBED_EDIT_COST_WARNING}
+          </Banner>
+        )}
       </ModalBody>
       <ModalFooter className={footerStyles}>
         <Button variant="default" onClick={onClose}>
           Cancel
         </Button>
-        <Button
-          data-testid="search-index-submit-button"
-          variant="primary"
-          onClick={onSubmitIndex}
-          disabled={isBusy || !!parsingError}
-          isLoading={isBusy}
-          loadingIndicator={<SpinLoader />}
+        <Tooltip
+          trigger={
+            <Button
+              data-testid="search-index-submit-button"
+              variant="primary"
+              onClick={onSubmitIndex}
+              disabled={isBusy || !!parsingError || isIndexDefinitionUnchanged}
+              isLoading={isBusy}
+              loadingIndicator={<SpinLoader />}
+            >
+              {mode === 'create' ? 'Create Search Index' : 'Save'}
+            </Button>
+          }
+          enabled={isIndexDefinitionUnchanged}
         >
-          {mode === 'create' ? 'Create Search Index' : 'Save'}
-        </Button>
+          Make a change to the index definition to enable saving.
+        </Tooltip>
       </ModalFooter>
     </Modal>
   );

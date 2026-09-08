@@ -17,6 +17,9 @@ import {
   type ToolGroup,
 } from '@mongodb-js/compass-generative-ai/provider';
 import { createNoopLogger } from '@mongodb-js/compass-logging/provider';
+import { createNoopTrack } from '@mongodb-js/compass-telemetry/provider';
+import { defaultPreferencesInstance } from 'compass-preferences-model';
+import type { AtlasAdminApiService } from '@mongodb-js/atlas-admin-api/provider';
 import { startTestServer } from '@mongodb-js/compass-test-server';
 import {
   toolCallEvalCases,
@@ -64,7 +67,10 @@ const logger = createNoopLogger('EVAL-TOOLS-CONTROLLER');
 const toolsController = new ToolsController({
   logger,
   getTelemetryAnonymousId: () => 'eval-anonymous-id',
-  enableTelemetry: false,
+  track: createNoopTrack(),
+  enableMCPTelemetry: false,
+  preferences: defaultPreferencesInstance,
+  atlasAdminApi: {} as AtlasAdminApiService,
 });
 
 let toolsInitialized = false;
@@ -104,7 +110,7 @@ function getToolsForCase({
 
   toolsController.setActiveTools(toolGroups);
   toolsController.setContext({
-    enableTelemetry: false,
+    enableMCPTelemetry: false,
     connections: [connectionConfig],
     query: input.currentQuery ? JSON.stringify(input.currentQuery) : undefined,
     pipeline: input.currentPipeline
